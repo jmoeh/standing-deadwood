@@ -19,7 +19,7 @@ df = pd.DataFrame(columns=["filename", "bounds", "resolution"])
 # Iterate over all GeoTIFF files in the directory
 for filename in os.listdir(args.input_dir):
     if filename.endswith(".tif"):
-        filepath = os.path.join(directory, filename)
+        filepath = os.path.join(args.input_dir, filename)
 
         # Read the image
         with rasterio.open(filepath) as src:
