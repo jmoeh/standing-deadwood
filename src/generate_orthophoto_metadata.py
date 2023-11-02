@@ -14,7 +14,9 @@ parser.add_argument(
 args = parser.parse_args()
 
 # Initialize an empty DataFrame
-df = pd.DataFrame(columns=["filename", "bounds", "resolution"])
+df = pd.DataFrame(
+    columns=["filename", "left", "right", "bottom", "top", "width", "height"]
+)
 
 # Iterate over all GeoTIFF files in the directory
 for filename in os.listdir(args.input_dir):
@@ -25,11 +27,27 @@ for filename in os.listdir(args.input_dir):
         with rasterio.open(filepath) as src:
             # Extract the bounds and resolution
             bounds = src.bounds
-            resolution = src.res
+            meta = src.meta
 
         # Add a new row to the DataFrame
-        df = df.append(
-            {"filename": filename, "bounds": bounds, "resolution": resolution},
+        df = pd.concat(
+            [
+                df,
+                pd.DataFrame(
+                    [
+                        {
+                            "filename": filename,
+                            "left": bounds.left,
+                            "right": bounds.right,
+                            "bottom": bounds.bottom,
+                            "top": bounds.top,
+                            "width": meta["width"],
+                            "height": meta["height"],
+                        }
+                    ]
+                ),
+            ],
+            axis=0,
             ignore_index=True,
         )
 
