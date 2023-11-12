@@ -34,7 +34,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "-gw",
-    "--gw-path",
+    "--gw_path",
     help="Path to the the gdal_warp binary",
     default="gdalwarp",
     required=False,
@@ -54,5 +54,5 @@ for filename in os.listdir(args.images_dir):
             for image_cell_width in image_cell_widths:
                 image_cell_width = round(image_cell_width, 2)
                 os.system(
-                    f"{args['gw-path']} -tr {image_cell_width} {image_cell_width} {filepath} {filepath[:-4]}_{'{0:.2f}'.format(image_cell_width)}.tif"
+                    f"{args.gw_path} -tr {image_cell_width} {image_cell_width} {filepath} {filepath[:-4]}_{'{0:.2f}'.format(image_cell_width)}.tif"
                 )
