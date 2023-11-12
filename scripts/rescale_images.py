@@ -1,8 +1,9 @@
 import argparse
 import os
-
+import concurrent.futures
 import numpy as np
 import rasterio
+from tqdm import tqdm
 
 
 # add helper method to shorten cell size list
@@ -17,6 +18,32 @@ def shorten_list(arr, target):
     else:
         # If no bigger number is found, return an empty array
         return []
+
+
+def process_image(image_path, image_cell_width, gw_path):
+    image_cell_width = round(image_cell_width, 2)
+    os.system(
+        f"{gw_path} -q -tr {image_cell_width} {image_cell_width} {image_path} {image_path[:-4]}_{'{0:.2f}'.format(image_cell_width)}.tif"
+    )
+
+
+def process_file(filename, args, cell_widths):
+    filepath = os.path.join(args.images_dir, filename)
+    if filename.endswith("8857.tif"):
+        with rasterio.open(filepath) as image:
+            # find desired cell widths for the given image
+            image_cell_widths = shorten_list(cell_widths, image.transform[0])
+
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=args.jobs
+            ) as executor:
+                # Use ThreadPoolExecutor for parallel processing
+                futures = [
+                    executor.submit(process_image, filepath, cw, args.gw_path)
+                    for cw in image_cell_widths
+                ]
+                # Wait for all futures to complete
+                concurrent.futures.wait(futures)
 
 
 # Add argument parser to get label dir, metadata file, and output dir
@@ -39,20 +66,28 @@ parser.add_argument(
     default="gdalwarp",
     required=False,
 )
+parser.add_argument(
+    "-j",
+    "--jobs",
+    type=int,
+    default=1,
+    help="Number of parallel jobs to run",
+    required=False,
+)
 args = parser.parse_args()
 
 # define desired cell width in meters
 cell_widths = np.arange(0.04, 0.21, 0.02)
 
-for filename in os.listdir(args.images_dir):
-    filepath = os.path.join(args.images_dir, filename)
-    if filename.endswith("8857.tif"):
-        with rasterio.open(filepath) as image:
-            # find desired cell widths for the given image
-            image_cell_widths = shorten_list(cell_widths, image.transform[0])
 
-            for image_cell_width in image_cell_widths:
-                image_cell_width = round(image_cell_width, 2)
-                os.system(
-                    f"{args.gw_path} -tr {image_cell_width} {image_cell_width} {filepath} {filepath[:-4]}_{'{0:.2f}'.format(image_cell_width)}.tif"
-                )
+# List all files in the images directory and process them in parallel
+with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+    futures = [
+        executor.submit(process_file, filename, args, cell_widths)
+        for filename in os.listdir(args.images_dir)
+    ]
+    # Wait for all futures to complete
+    for _ in tqdm(
+        concurrent.futures.as_completed(futures), total=len(os.listdir(args.images_dir))
+    ):
+        pass
