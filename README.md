@@ -16,3 +16,7 @@
     ```
     python scripts/generate_orthophoto_masks.py -m [metadata_file] [-o [out_dir]] [labels_dir]
     ```
+* ### Reproject images to EPSG:8857
+    ```
+    ls *.tif | parallel --bar -j 30 ~/gdal-3.7.3/build/apps/gdalwarp -co COMPRESS=DEFLATE -co TILED=YES -r bilinear -t_srs EPSG:8857 {} /net/scratch/jmoehring/orthophotos_8857/{.}.8857.tif
+    ```
