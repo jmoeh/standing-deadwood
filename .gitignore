@@ -2,4 +2,4 @@ venv
 .vscode
 data/*
 !data/.gitkeep
-```
+__pycache__

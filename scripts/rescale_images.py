@@ -22,14 +22,17 @@ def shorten_list(arr, target):
 
 def process_image(image_path, image_cell_width, gw_path):
     image_cell_width = round(image_cell_width, 2)
+    scaled_image_path = image_path.replace(
+        "_8857", "_8857_{0:.2f}".format(image_cell_width)
+    )
     os.system(
-        f"{gw_path} -q -tr {image_cell_width} {image_cell_width} {image_path} {image_path[:-4]}_{'{0:.2f}'.format(image_cell_width)}.tif"
+        f"{gw_path} -q -tr {image_cell_width} {image_cell_width} {image_path} {scaled_image_path}"
     )
 
 
 def process_file(filename, args, cell_widths):
     filepath = os.path.join(args.images_dir, filename)
-    if filename.endswith("8857.tif"):
+    if filename.endswith("8857.tif") or filename.endswith("8857_mask.tif"):
         with rasterio.open(filepath) as image:
             # find desired cell widths for the given image
             image_cell_widths = shorten_list(cell_widths, image.transform[0])
@@ -51,13 +54,6 @@ parser = argparse.ArgumentParser(description="Rescale images")
 parser.add_argument(
     "images_dir",
     help="Path to the directory containing the to be rescaled images",
-)
-parser.add_argument(
-    "-o",
-    "--out_dir",
-    help="Path where the rescaled images will be saved",
-    default="./",
-    required=False,
 )
 parser.add_argument(
     "-gw",
