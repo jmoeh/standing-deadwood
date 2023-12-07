@@ -6,7 +6,6 @@ import tqdm
 
 
 def process_file(in_file):
-    print(in_file)
     in_path = os.path.join(args.images_dir, in_file)
     out_path = os.path.join(args.out_dir, in_file[:-4] + "_8857.tif")
     if not os.path.exists(out_path):
