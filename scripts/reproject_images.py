@@ -9,10 +9,10 @@ def process_file(in_file):
     print(in_file)
     in_path = os.path.join(args.images_dir, in_file)
     out_path = os.path.join(args.out_dir, in_file[:-4] + "_8857.tif")
-    # if not os.path.exists(out_path):
-    os.system(
-        f"{args.gw_path} -co COMPRESS=DEFLATE -co TILED=YES -r bilinear -t_srs EPSG:8857 {in_path} {out_path}"
-    )
+    if not os.path.exists(out_path):
+        os.system(
+            f"{args.gw_path} -co COMPRESS=DEFLATE -co TILED=YES -r bilinear -t_srs EPSG:8857 {in_path} {out_path}"
+        )
 
 
 parser = argparse.ArgumentParser(description="Reproject images")
@@ -46,7 +46,7 @@ args = parser.parse_args()
 with tqdm.tqdm(total=len(os.listdir(args.images_dir))) as pbar:
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
         futures = [
-            executor.submit(process_file, filename, args.out_dir)
+            executor.submit(process_file, filename)
             for filename in os.listdir(args.images_dir)
         ]
         # Wait for all futures to complete
