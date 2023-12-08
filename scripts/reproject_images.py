@@ -22,7 +22,7 @@ parser.add_argument(
 parser.add_argument(
     "-o",
     "--out_dir",
-    help="Path to the the gdal_warp binary",
+    help="Path where the reprojected images will be stored",
     default="./",
     required=False,
 )

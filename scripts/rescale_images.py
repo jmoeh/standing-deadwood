@@ -1,9 +1,10 @@
 import argparse
-import os
 import concurrent.futures
+import os
+
 import numpy as np
 import rasterio
-from tqdm import tqdm
+import tqdm
 
 
 # add helper method to shorten cell size list
@@ -76,14 +77,12 @@ args = parser.parse_args()
 cell_widths = np.arange(0.04, 0.21, 0.02)
 
 
-# List all files in the images directory and process them in parallel
-with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
-    futures = [
-        executor.submit(process_file, filename, args, cell_widths)
-        for filename in os.listdir(args.images_dir)
-    ]
-    # Wait for all futures to complete
-    for _ in tqdm(
-        concurrent.futures.as_completed(futures), total=len(os.listdir(args.images_dir))
-    ):
-        pass
+with tqdm.tqdm(total=len(os.listdir(args.images_dir))) as pbar:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+        futures = [
+            executor.submit(process_file, filename, args, cell_widths)
+            for filename in os.listdir(args.images_dir)
+        ]
+        # Wait for all futures to complete
+        for _ in concurrent.futures.as_completed(futures):
+            pbar.update(1)
