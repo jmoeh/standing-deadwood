@@ -134,7 +134,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 with tqdm(total=len(os.listdir(args.images_dir))) as pbar:
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.jobs) as executor:
         futures = [
             executor.submit(process_file, os.path.join(args.images_dir, filename))
             for filename in os.listdir(args.images_dir)
