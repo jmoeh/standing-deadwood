@@ -9,8 +9,8 @@ from rasterio import windows
 from rasterio.features import geometry_window
 from tqdm import tqdm
 
-tile_width = 512
-tile_height = 512
+tile_width = 572
+tile_height = 572
 tile_overlap = 0
 out_filename = "{}_{}_{}.tif"
 
