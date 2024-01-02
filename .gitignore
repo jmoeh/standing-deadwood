@@ -1,6 +1,7 @@
 venv
 wandb
 .vscode
+.ipynb_checkpoints
 data/*
 !data/.gitkeep
 __pycache__

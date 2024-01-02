@@ -2,14 +2,15 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from unet.dice_score import multiclass_dice_coeff, dice_coeff
+from unet.dice_score import dice_coeff
 
 
 @torch.inference_mode()
-def evaluate(net, dataloader, device, amp):
+def evaluate(net, criterion, dataloader, device, amp):
     net.eval()
     num_val_batches = len(dataloader)
     dice_score = 0
+    dice_loss = 0
 
     # iterate over the validation set
     with torch.autocast(device.type if device.type != "mps" else "cpu", enabled=amp):
@@ -28,31 +29,19 @@ def evaluate(net, dataloader, device, amp):
 
             # predict the mask
             mask_pred = net(image)
+            assert (
+                mask_true.min() >= 0 and mask_true.max() <= 1
+            ), "True mask indices should be in [0, 1]"
 
-            if net.n_classes == 1:
-                assert (
-                    mask_true.min() >= 0 and mask_true.max() <= 1
-                ), "True mask indices should be in [0, 1]"
-                mask_pred = (F.sigmoid(mask_pred) > 0.5).float()
-                # compute the Dice score
-                dice_score += dice_coeff(mask_pred, mask_true, reduce_batch_first=False)
-            else:
-                assert (
-                    mask_true.min() >= 0 and mask_true.max() < net.n_classes
-                ), "True mask indices should be in [0, n_classes["
-                # convert to one-hot format
-                mask_true = (
-                    F.one_hot(mask_true, net.n_classes).permute(0, 3, 1, 2).float()
-                )
-                mask_pred = (
-                    F.one_hot(mask_pred.argmax(dim=1), net.n_classes)
-                    .permute(0, 3, 1, 2)
-                    .float()
-                )
-                # compute the Dice score, ignoring background
-                dice_score += multiclass_dice_coeff(
-                    mask_pred[:, 1:], mask_true[:, 1:], reduce_batch_first=False
-                )
+            # apply sigmoid to the mask
+            mask_pred = (F.sigmoid(mask_pred) > 0.5).float()
+            # compute the Dice score
+            dice_score += dice_coeff(mask_pred, mask_true, reduce_batch_first=False)
+            # compute the Dice loss
+            item_loss = criterion(mask_pred, mask_true.float())
+            item_loss += 1 - dice_score
+
+            dice_loss += item_loss.item()
 
     net.train()
-    return dice_score / max(num_val_batches, 1)
+    return dice_score / max(num_val_batches, 1), dice_loss / max(num_val_batches, 1)
