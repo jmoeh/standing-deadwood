@@ -1,5 +1,6 @@
 from collections import defaultdict
 import os
+import re
 
 import torch
 from PIL import Image
@@ -23,10 +24,11 @@ class DeadwoodDataset(Dataset):
         # group the tiles by the base images and perform kfold split on the base images
         self.images_paths = os.listdir(image_dir)
         self.file_groups = defaultdict(list)
-        for index, image_path in enumerate(self.images_paths):
-            self.file_groups[image_path.split("_8857")[0]].append(index)
+        base_file_pattern = r".+?(?=_\d+_\d+\.tif)"
 
-        lens = len(self.file_groups)
+        for index, image_path in enumerate(self.images_paths):
+            base_file_name = re.search(base_file_pattern, image_path).group(0)
+            self.file_groups[base_file_name].append(index)
 
         self.kfold = KFold(n_splits=n_folds, shuffle=True, random_state=random_seed)
         self.folds = list(self.kfold.split(list(self.file_groups.keys())))
@@ -54,7 +56,7 @@ class DeadwoodDataset(Dataset):
         image_name = self.images_paths[index]
         image = Image.open(os.path.join(self.image_dir, image_name)).convert("RGB")
         mask = Image.open(
-            os.path.join(self.mask_dir, image_name.replace("8857", "8857_mask", 1))
+            os.path.join(self.mask_dir, image_name.replace(".tif", "_mask.tif", 1))
         ).convert("L")
 
         image_tensor = transforms.ToTensor()(image).float().contiguous()
