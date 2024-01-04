@@ -55,14 +55,20 @@ class DeadwoodDataset(Dataset):
     def __getitem__(self, index):
         image_name = self.images_paths[index]
         image = Image.open(os.path.join(self.image_dir, image_name)).convert("RGB")
-        mask = Image.open(
-            os.path.join(self.mask_dir, image_name.replace(".tif", "_mask.tif", 1))
-        ).convert("L")
 
-        image_tensor = transforms.ToTensor()(image).float().contiguous()
-        mask_tensor = transforms.PILToTensor()(mask).squeeze(1).long().contiguous()
+        pattern = re.compile(r"^(.+?)_(\d+)_(\d+)\.tif$")
+        match = pattern.match(image_name)
 
-        return image_tensor, mask_tensor
+        if match:
+            mask_name = f"{match.group(1)}_mask_{match.group(2)}_{match.group(3)}.tif"
+            mask = Image.open(os.path.join(self.mask_dir, mask_name)).convert("L")
+
+            image_tensor = transforms.ToTensor()(image).float().contiguous()
+            mask_tensor = transforms.PILToTensor()(mask).squeeze(1).long().contiguous()
+
+            return image_tensor, mask_tensor
+        else:
+            raise ValueError(f"Invalid tile name: {image_name}")
 
     def __len__(self):
         return len(self.images_paths)
