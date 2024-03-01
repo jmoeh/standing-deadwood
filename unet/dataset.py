@@ -22,7 +22,7 @@ class DeadwoodDataset(Dataset):
         self.mask_dir = mask_dir
 
         # group the tiles by the base images and perform kfold split on the base images
-        self.images_paths = os.listdir(image_dir)
+        self.images_paths = sorted(os.listdir(image_dir))
         self.file_groups = defaultdict(list)
         base_file_pattern = r".+?(?=_\d+_\d+\.tif)"
 
