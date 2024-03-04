@@ -5,3 +5,4 @@ wandb
 data/*
 !data/.gitkeep
 __pycache__
+tmp/
