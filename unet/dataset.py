@@ -49,7 +49,7 @@ class DeadwoodDataset(Dataset):
         for _ in range(epochs):
             train_files = []
             for resolution, resolution_indices in resolution_groups.items():
-                sampled_indices = np.random.choice(resolution_indices, size=n_res_samples, replace=False)
+                sampled_indices = np.random.choice(resolution_indices, size=n_res_samples, replace=True)
                 train_files.extend(sampled_indices)
             train_files_epochs.append(train_files)
             
