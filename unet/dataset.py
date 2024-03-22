@@ -51,18 +51,15 @@ class DeadwoodDataset(Dataset):
                 transforms.RandomVerticalFlip(),
             ]
         )
-        image_transforms = transforms.Compose(
-            [
-                transforms.RandomAutocontrast(p=0.2),
-            ]
+        image_transforms = transforms.Compose([transforms.RandomAutocontrast()])
+        image_tensor, mask_tensor = RandomTransform(mutual_transforms)(image, mask)
+        image_tensor = (
+            transforms.ToTensor()(image_transforms(image_tensor)).float().contiguous()
         )
-        image_tensor, mask_tensor = RandomTransform(mutual_transforms)(
-            image_transforms(image), mask
-        )
-        image_tensor = transforms.ToTensor()(image_tensor).float().contiguous()
         mask_tensor = (
-            transforms.PILToTensor()(mask_tensor).squeeze(1).long().contiguous()
+            transforms.PILToTensor()(mask_tensor).squeeze(0).long().contiguous()
         )
+
         return image_tensor, mask_tensor, self.register_df.iloc[index].to_dict()
 
     def __len__(self):
@@ -75,12 +72,11 @@ class RandomTransform:
 
     def __call__(self, image, mask):
         seed = torch.randint(0, 2**32, (1,))
-        random_state = torch.random.fork_rng([seed.item()])
+        torch.manual_seed(seed.item())
 
         transformed_image = self.transform(image)
 
-        torch.random.set_rng_state(random_state)
+        torch.manual_seed(seed.item())
         transformed_mask = self.transform(mask)
 
-        torch.random.set_rng_state(random_state)
         return transformed_image, transformed_mask
