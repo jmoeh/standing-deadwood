@@ -7,14 +7,14 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, Subset
 from torchvision.transforms import transforms
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 
 class DeadwoodDataset(Dataset):
     def __init__(
         self,
         register_df,
-        test_size=0.3,
+        no_folds=5,
         random_seed=10,
     ):
         super(DeadwoodDataset, self).__init__()
@@ -23,22 +23,50 @@ class DeadwoodDataset(Dataset):
         random.seed(self.random_seed)
         np.random.seed(self.random_seed)
 
-        train_register_df, test_register_df = train_test_split(
-            register_df,
-            test_size=test_size,
-            random_state=self.random_seed,
-            stratify=register_df[["biome", "resolution_bin"]],
+        # split the dataset into train and test but grouped by base_image_ids so that the same base image is not in both train and test
+        # but stratified by biome and resolution_bin
+        self.base_file_register = (
+            register_df.groupby("base_file_name").agg({"biome": "first"}).reset_index()
+        )
+        kfold = StratifiedKFold(
+            n_splits=no_folds, random_state=self.random_seed, shuffle=True
+        )
+        self.folds = kfold.split(
+            self.base_file_register, self.base_file_register["biome"].astype(str)
         )
 
-        self.train_register_df = train_register_df
-        self.test_register_df = test_register_df
+        # get indices per fold of register_df
+        self.train_indices = []
+        self.test_indices = []
 
-        # get indices of rows from original dataframe
-        self.train_indices = self.train_register_df.index.tolist()
-        self.test_indices = self.test_register_df.index.tolist()
+        for train_index, test_index in self.folds:
+            train_files = self.base_file_register.iloc[train_index]["base_file_name"]
+            test_files = self.base_file_register.iloc[test_index]["base_file_name"]
 
-    def get_train_test(self):
-        return Subset(self, self.train_indices), Subset(self, self.test_indices)
+            train_indices = self.register_df[
+                self.register_df["base_file_name"].isin(train_files)
+            ].index.tolist()
+            test_indices = self.register_df[
+                self.register_df["base_file_name"].isin(test_files)
+            ].index.tolist()
+
+            self.train_indices.append(train_indices)
+            self.test_indices.append(test_indices)
+
+    def get_fold(self, fold):
+        return Subset(self, self.train_indices[fold]), Subset(
+            self, self.test_indices[fold][:64]
+        )
+
+    def get_train_sample_weights(self, fold, balancing_factor=0.5):
+        train_register = self.register_df.iloc[self.train_indices[fold]]
+        value_counts = train_register["resolution_bin"].value_counts()
+
+        # apply balancing factor to the counts before inverting to get weights
+        sqrt_counts = value_counts.apply(lambda x: x**balancing_factor)
+        weights = 1 / sqrt_counts
+
+        return train_register["resolution_bin"].map(weights)
 
     def __getitem__(self, index):
         image_path = self.register_df.iloc[index]["file_path"]
