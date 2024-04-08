@@ -39,11 +39,19 @@ def confusion_values(input: Tensor, target: Tensor):
 
     f1 = 2 * (precision * recall) / (precision + recall)
 
-    return {
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-    }
+    return precision, recall, f1
+
+
+def confusion_tensor(input: Tensor, target: Tensor):
+    assert input.size() == target.size()
+    input = input.bool()
+    target = target.bool()
+    # 0: TN, 1: TP, 2: FP, 3: FN
+    confusion_tensor = target * 0
+    confusion_tensor[target & input] = 1
+    confusion_tensor[(~target) & input] = 2
+    confusion_tensor[target & (~input)] = 3
+    return confusion_tensor
 
 
 def dice_loss(input: Tensor, target: Tensor):

@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, Subset
 from torchvision.transforms import transforms
+from rasterio import windows
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
 
@@ -15,7 +16,9 @@ class DeadwoodDataset(Dataset):
         self,
         register_df,
         no_folds=5,
-        random_seed=10,
+        random_seed=1,
+        test_size=0.2,
+        bins=np.arange(0, 0.21, 0.02),
     ):
         super(DeadwoodDataset, self).__init__()
         self.register_df = register_df
@@ -26,36 +29,58 @@ class DeadwoodDataset(Dataset):
         # split the dataset into train and test but grouped by base_image_ids so that the same base image is not in both train and test
         # but stratified by biome and resolution_bin
         self.base_file_register = (
-            register_df.groupby("base_file_name").agg({"biome": "first"}).reset_index()
+            register_df.groupby("base_file_name")
+            .agg({"biome": "first", "resolution_bin": "min"})
+            .reset_index()
         )
+
+        self.base_train_val_register, self.base_test_register = train_test_split(
+            self.base_file_register,
+            test_size=test_size,
+            random_state=self.random_seed,
+            stratify=self.base_file_register[["biome"]],
+        )
+
+        test_files = self.base_test_register["base_file_name"]
+        self.test_indices = self.register_df[
+            self.register_df["base_file_name"].isin(test_files)
+        ].index.tolist()
+
+        self.base_train_val_register = self.base_train_val_register[
+            self.base_train_val_register["resolution_bin"].isin(bins)
+        ]
+
         kfold = StratifiedKFold(
             n_splits=no_folds, random_state=self.random_seed, shuffle=True
         )
         self.folds = kfold.split(
-            self.base_file_register, self.base_file_register["biome"].astype(str)
+            self.base_train_val_register,
+            self.base_train_val_register["biome"].astype(str),
         )
 
         # get indices per fold of register_df
         self.train_indices = []
-        self.test_indices = []
+        self.val_indices = []
 
-        for train_index, test_index in self.folds:
+        for train_index, val_index in self.folds:
             train_files = self.base_file_register.iloc[train_index]["base_file_name"]
-            test_files = self.base_file_register.iloc[test_index]["base_file_name"]
-
+            val_files = self.base_file_register.iloc[val_index]["base_file_name"]
             train_indices = self.register_df[
                 self.register_df["base_file_name"].isin(train_files)
             ].index.tolist()
-            test_indices = self.register_df[
-                self.register_df["base_file_name"].isin(test_files)
+            val_indices = self.register_df[
+                self.register_df["base_file_name"].isin(val_files)
             ].index.tolist()
 
             self.train_indices.append(train_indices)
-            self.test_indices.append(test_indices)
+            self.val_indices.append(val_indices)
 
-    def get_fold(self, fold):
+    def get_test_set(self):
+        return Subset(self, self.test_indices)
+
+    def get_train_val_fold(self, fold):
         return Subset(self, self.train_indices[fold]), Subset(
-            self, self.test_indices[fold][:64]
+            self, self.val_indices[fold]
         )
 
     def get_train_sample_weights(self, fold, balancing_factor=0.5):
@@ -66,7 +91,7 @@ class DeadwoodDataset(Dataset):
         sqrt_counts = value_counts.apply(lambda x: x**balancing_factor)
         weights = 1 / sqrt_counts
 
-        return train_register["resolution_bin"].map(weights)
+        return torch.from_numpy(train_register["resolution_bin"].map(weights).values)
 
     def __getitem__(self, index):
         image_path = self.register_df.iloc[index]["file_path"]
@@ -79,14 +104,26 @@ class DeadwoodDataset(Dataset):
                 transforms.RandomVerticalFlip(),
             ]
         )
-        image_transforms = transforms.Compose([transforms.RandomAutocontrast()])
-        image_tensor, mask_tensor = RandomTransform(mutual_transforms)(image, mask)
-        image_tensor = (
-            transforms.ToTensor()(image_transforms(image_tensor)).float().contiguous()
+        image_transforms = transforms.Compose(
+            [
+                transforms.RandomAutocontrast(),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406],
+                    std=[0.229, 0.224, 0.225],
+                ),
+            ]
         )
-        mask_tensor = (
-            transforms.PILToTensor()(mask_tensor).squeeze(0).long().contiguous()
+        mask_transforms = transforms.Compose(
+            [
+                transforms.PILToTensor(),
+            ]
         )
+        image_tensor, mask_tensor = CoupledRandomTransform(mutual_transforms)(
+            image, mask
+        )
+        image_tensor = image_transforms(image_tensor).float().contiguous()
+        mask_tensor = mask_transforms(mask_tensor).squeeze(0).long().contiguous()
 
         return image_tensor, mask_tensor, self.register_df.iloc[index].to_dict()
 
@@ -94,7 +131,7 @@ class DeadwoodDataset(Dataset):
         return len(self.register_df)
 
 
-class RandomTransform:
+class CoupledRandomTransform:
     def __init__(self, transform):
         self.transform = transform
 
@@ -108,3 +145,16 @@ class RandomTransform:
         transformed_mask = self.transform(mask)
 
         return transformed_image, transformed_mask
+
+
+def get_windows(xmin, ymin, xmax, ymax, tile_width, tile_height, overlap):
+    xstep = tile_width - overlap
+    ystep = tile_height - overlap
+    for x in range(xmin, xmax, xstep):
+        if x + tile_width > xmax:
+            x = xmax - tile_width
+        for y in range(ymin, ymax, ystep):
+            if y + tile_height > ymax:
+                y = ymax - tile_height
+            window = windows.Window(x, y, tile_width, tile_height)
+            yield window
