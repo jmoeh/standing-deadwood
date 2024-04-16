@@ -46,10 +46,11 @@ class DeadwoodInferenceDataset(Dataset):
             cropped_window.width + (2 * self.padding),
             cropped_window.height + (2 * self.padding),
         )
-        image = image_src.read(window=inference_window)
+        image = image_src.read((1, 2, 3), window=inference_window)
 
         # Reshape the image tensor to have 3 channels
         image = image.transpose(1, 2, 0)
+
         image_transforms = transforms.Compose(
             [
                 transforms.ToTensor(),
