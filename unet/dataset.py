@@ -34,17 +34,20 @@ class DeadwoodDataset(Dataset):
             .reset_index()
         )
 
-        self.base_train_val_register, self.base_test_register = train_test_split(
-            self.base_file_register,
-            test_size=test_size,
-            random_state=self.random_seed,
-            stratify=self.base_file_register[["biome"]],
-        )
+        if test_size > 0:
+            self.base_train_val_register, self.base_test_register = train_test_split(
+                self.base_file_register,
+                test_size=test_size,
+                random_state=self.random_seed,
+                stratify=self.base_file_register[["biome"]],
+            )
 
-        test_files = self.base_test_register["base_file_name"]
-        self.test_indices = self.register_df[
-            self.register_df["base_file_name"].isin(test_files)
-        ].index.tolist()
+            test_files = self.base_test_register["base_file_name"]
+            self.test_indices = self.register_df[
+                self.register_df["base_file_name"].isin(test_files)
+            ].index.tolist()
+        else:
+            self.base_train_val_register = self.base_file_register
 
         self.base_train_val_register = self.base_train_val_register[
             self.base_train_val_register["resolution_bin"].isin(bins)
@@ -94,38 +97,45 @@ class DeadwoodDataset(Dataset):
         return torch.from_numpy(train_register["resolution_bin"].map(weights).values)
 
     def __getitem__(self, index):
-        image_path = self.register_df.iloc[index]["file_path"]
-        image = Image.open(image_path).convert("RGB")
-        mask_path = image_path.replace(".tif", "_mask.tif")
-        mask = Image.open(mask_path).convert("L")
-        mutual_transforms = transforms.Compose(
-            [
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-            ]
-        )
-        image_transforms = transforms.Compose(
-            [
-                transforms.RandomAutocontrast(),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225],
-                ),
-            ]
-        )
-        mask_transforms = transforms.Compose(
-            [
-                transforms.PILToTensor(),
-            ]
-        )
-        image_tensor, mask_tensor = CoupledRandomTransform(mutual_transforms)(
-            image, mask
-        )
-        image_tensor = image_transforms(image_tensor).float().contiguous()
-        mask_tensor = mask_transforms(mask_tensor).squeeze(0).long().contiguous()
+        while True:
+            image_path = self.register_df.iloc[index]["file_path"]
+            try:
+                image = Image.open(image_path).convert("RGB")
+                mask_path = image_path.replace(".tif", "_mask.tif")
+                mask = Image.open(mask_path).convert("L")
+                mutual_transforms = transforms.Compose(
+                    [
+                        transforms.RandomHorizontalFlip(),
+                        transforms.RandomVerticalFlip(),
+                    ]
+                )
+                image_transforms = transforms.Compose(
+                    [
+                        transforms.RandomAutocontrast(),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            mean=[0.485, 0.456, 0.406],
+                            std=[0.229, 0.224, 0.225],
+                        ),
+                    ]
+                )
+                mask_transforms = transforms.Compose(
+                    [
+                        transforms.PILToTensor(),
+                    ]
+                )
+                image_tensor, mask_tensor = CoupledRandomTransform(mutual_transforms)(
+                    image, mask
+                )
+                image_tensor = image_transforms(image_tensor).float().contiguous()
+                mask_tensor = (
+                    mask_transforms(mask_tensor).squeeze(0).long().contiguous()
+                )
 
-        return image_tensor, mask_tensor, self.register_df.iloc[index].to_dict()
+                return image_tensor, mask_tensor, self.register_df.iloc[index].to_dict()
+            except:
+                print(f"skipping image {image_path}")
+                index = (index + 1) % len(self.register_df)
 
     def __len__(self):
         return len(self.register_df)
