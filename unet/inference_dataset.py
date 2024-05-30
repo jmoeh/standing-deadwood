@@ -2,7 +2,8 @@ import rasterio
 from rasterio import windows
 from torch.utils.data import Dataset
 from torchvision.transforms import transforms
-from ..dataset import get_windows
+
+from unet.train_dataset import get_windows
 
 
 class DeadwoodInferenceDataset(Dataset):

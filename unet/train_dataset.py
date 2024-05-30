@@ -1,14 +1,12 @@
-from collections import defaultdict
 import random
 
+import numpy as np
 import torch
 from PIL import Image
-import pandas as pd
-import numpy as np
-from torch.utils.data import Dataset, Subset
-from torchvision.transforms import transforms
 from rasterio import windows
 from sklearn.model_selection import StratifiedKFold, train_test_split
+from torch.utils.data import Dataset, Subset
+from torchvision.transforms import transforms
 
 
 class DeadwoodDataset(Dataset):

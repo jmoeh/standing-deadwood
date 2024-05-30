@@ -1,52 +1,24 @@
 import os
 import sys
 from pathlib import Path
+from typing import TypedDict
 
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import wandb
-from torch.utils.data import DataLoader, WeightedRandomSampler, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
 from tqdm import tqdm
-import pandas as pd
-import numpy as np
-from typing import TypedDict
 
 from unet.train_dataset import DeadwoodDataset
-from unet.unet_model import UNet
 from unet.unet_loss import BCEDiceLoss
-
-
-DeadwoodConfig = TypedDict(
-    "DeadwoodConfig",
-    {
-        "use_wandb": bool,
-        "epochs": int,
-        "no_folds": int,
-        "batch_size": int,
-        "epoch_train_samples": int,
-        "epoch_val_samples": int,
-        "test_size": float,
-        "balancing_factor": float,
-        "pos_weight": float,
-        "bce_weight": float,
-        "bins": np.ndarray,
-        "amp": bool,
-        "learning_rate": float,
-        "weight_decay": float,
-        "momentum": float,
-        "lr_patience": int,
-        "num_workers": int,
-        "gradient_clipping": float,
-        "register_file": str,
-        "experiments_dir": str,
-        "random_seed": int,
-    },
-)
+from unet.unet_model import UNet
 
 
 class DeadwoodTrainer:
 
-    default_config: DeadwoodConfig = {
+    default_config = {
         "use_wandb": True,
         "epochs": 60,
         "no_folds": 3,
@@ -70,7 +42,7 @@ class DeadwoodTrainer:
         "random_seed": 100,
     }
 
-    def __init__(self, run_name: str, config: DeadwoodConfig = default_config):
+    def __init__(self, run_name: str, config=default_config):
         self.config = config
         self.run_name = run_name
 
@@ -81,7 +53,6 @@ class DeadwoodTrainer:
     def setup_model(self):
         # model with three input channels (RGB)
         model = UNet(n_channels=3, n_classes=1, bilinear=True)
-        model = model.to(memory_format=torch.channels_last)
         if torch.cuda.device_count() > 1:
             # train on GPU 1 and 2
             model = nn.DataParallel(model)
@@ -99,14 +70,14 @@ class DeadwoodTrainer:
         )
 
         # optimizer
-        optimizer = torch.optim.RMSprop(
+        self.optimizer = torch.optim.RMSprop(
             model.parameters(),
             lr=self.config["learning_rate"],
             weight_decay=self.config["weight_decay"],
             momentum=self.config["momentum"],
         )
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, "min", patience=self.config["lr_patience"]
+            self.optimizer, "min", patience=self.config["lr_patience"]
         )
         self.grad_scaler = torch.cuda.amp.grad_scaler.GradScaler(
             enabled=self.config["amp"]
@@ -127,7 +98,7 @@ class DeadwoodTrainer:
         train_sampler = WeightedRandomSampler(
             self.dataset.get_train_sample_weights(
                 fold=fold, balancing_factor=self.config["balancing_factor"]
-            ),
+            ).tolist(),  # Convert tensor to sequence of floats
             self.config["epoch_train_samples"],
             replacement=False,
         )
@@ -198,14 +169,16 @@ class DeadwoodTrainer:
             train_loss = epoch_loss / len(self.train_loader)
             val_loss = self.evaluate(epoch=epoch)
             self.scheduler.step(val_loss)
-            self.experiment.log(
-                {
-                    "train_loss": train_loss,
-                    "val_loss": val_loss,
-                    "epoch": epoch,
-                    "fold": fold,
-                }
-            )
+
+            if self.config["use_wandb"]:
+                self.experiment.log(
+                    {
+                        "train_loss": train_loss,
+                        "val_loss": val_loss,
+                        "epoch": epoch,
+                        "fold": fold,
+                    }
+                )
 
     @torch.inference_mode()
     def evaluate(self, epoch: int):
@@ -238,7 +211,9 @@ class DeadwoodTrainer:
         return epoch_loss / len(self.val_loader)
 
     def save_checkpoint(self, fold: int, epoch: int):
-        checkpoint_path = Path(self.experiment.dir) / f"fold_{fold}_epoch_{epoch}.pth"
+        checkpoint_path = (
+            Path(self.config["experiments_dir"]) / f"fold_{fold}_epoch_{epoch}.pth"
+        )
         torch.save(
             {
                 "epoch": epoch,
