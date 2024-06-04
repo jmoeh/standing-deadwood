@@ -20,6 +20,7 @@ class DeadwoodTrainer:
 
     default_config = {
         "use_wandb": True,
+        "save_checkpoint": True,
         "epochs": 60,
         "no_folds": 3,
         "batch_size": 64,
@@ -27,8 +28,8 @@ class DeadwoodTrainer:
         "epoch_val_samples": 100000,
         "test_size": 0,
         "balancing_factor": 1,
-        "pos_weight": 40.0,
-        "bce_weight": 0.2,
+        "pos_weight": 1,
+        "bce_weight": 0.5,
         "bins": np.arange(0, 0.21, 0.02),
         "amp": True,
         "learning_rate": 1e-5,
@@ -163,7 +164,6 @@ class DeadwoodTrainer:
                     self.grad_scaler.update()
 
                     epoch_loss += loss.item()
-                    step += 1
                     pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
@@ -179,6 +179,8 @@ class DeadwoodTrainer:
                         "fold": fold,
                     }
                 )
+            if self.config["save_checkpoint"]:
+                self.save_checkpoint(fold=fold, epoch=epoch)
 
     @torch.inference_mode()
     def evaluate(self, epoch: int):
@@ -211,9 +213,7 @@ class DeadwoodTrainer:
         return epoch_loss / len(self.val_loader)
 
     def save_checkpoint(self, fold: int, epoch: int):
-        checkpoint_path = (
-            Path(self.config["experiments_dir"]) / f"fold_{fold}_epoch_{epoch}.pth"
-        )
+        run_path = Path(self.config["experiments_dir"]) / self.run_name
         torch.save(
             {
                 "epoch": epoch,
@@ -222,7 +222,7 @@ class DeadwoodTrainer:
                 "scheduler_state_dict": self.scheduler.state_dict(),
                 "grad_scaler_state_dict": self.grad_scaler.state_dict(),
             },
-            checkpoint_path,
+            run_path / f"fold_{fold}_epoch_{epoch}.pt",
         )
 
     def run(self):
