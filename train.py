@@ -18,11 +18,11 @@ if __name__ == "__main__":
     config = DeadwoodConfig = {
         "use_wandb": True,
         "save_checkpoint": True,
-        "epochs": 3,
+        "epochs": 60,
         "no_folds": 3,
-        "batch_size": 32,
-        "epoch_train_samples": 32,
-        "epoch_val_samples": 32,
+        "batch_size": 110,
+        "epoch_train_samples": 50000,
+        "epoch_val_samples": 0,
         "test_size": 0,
         "balancing_factor": 1,
         "pos_weight": 40.0,
@@ -50,7 +50,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--fold", "-f", type=int, default=-1)
     parser.add_argument("--devices", "-d", type=str, default="0")
-    parser.add_argument("--config_path", "-c", type=str, default="config.json")
+    parser.add_argument("--config_path", "-c", type=str)
     args = parser.parse_args()
 
     if args.devices:
