@@ -13,6 +13,7 @@ class DeadwoodDataset(Dataset):
     def __init__(
         self,
         register_df,
+        images_dir,
         no_folds=5,
         random_seed=1,
         test_size=0.2,
@@ -21,6 +22,8 @@ class DeadwoodDataset(Dataset):
         super(DeadwoodDataset, self).__init__()
         self.register_df = register_df
         self.random_seed = random_seed
+        self.images_dir = images_dir
+
         random.seed(self.random_seed)
         np.random.seed(self.random_seed)
 
@@ -96,7 +99,9 @@ class DeadwoodDataset(Dataset):
 
     def __getitem__(self, index):
         while True:
-            image_path = self.register_df.iloc[index]["file_path"]
+            image_path = (
+                f'{self.images_dir}{self.register_df.iloc[index]["global_file_path"]}'
+            )
             try:
                 image = Image.open(image_path).convert("RGB")
                 mask_path = image_path.replace(".tif", "_mask.tif")

@@ -20,8 +20,8 @@ if __name__ == "__main__":
         "epochs": 60,
         "no_folds": 3,
         "batch_size": 120,
-        "epoch_train_samples": 50000,
-        "epoch_val_samples": 0,
+        "epoch_train_samples": 1000,
+        "epoch_val_samples": 1000,
         "test_size": 0,
         "balancing_factor": 1,
         "pos_weight": 40.0,
@@ -35,6 +35,7 @@ if __name__ == "__main__":
         "num_workers": 32,
         "gradient_clipping": 1.0,
         "experiments_dir": "/net/home/jmoehring/experiments",
+        "images_dir": "/net/scratch/jmoehring",
         "register_file": "/net/scratch/jmoehring/tiles_register_biome_bin.csv",
         "random_seed": 100,
     }

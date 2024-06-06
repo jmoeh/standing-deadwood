@@ -1,7 +1,5 @@
-import os
-import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import TypedDict
 
 import numpy as np
 import pandas as pd
@@ -12,7 +10,7 @@ from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
 from tqdm import tqdm
 
 from unet.train_dataset import DeadwoodDataset
-from unet.unet_loss import BCEDiceLoss
+from unet.unet_loss import BCEDiceLoss, GroupedConfusion
 from unet.unet_model import UNet
 
 
@@ -88,6 +86,7 @@ class DeadwoodTrainer:
         register_df = pd.read_csv(self.config["register_file"])
         self.dataset = DeadwoodDataset(
             register_df=register_df,
+            images_dir=self.config["images_dir"],
             no_folds=self.config["no_folds"],
             random_seed=self.config["random_seed"],
             bins=self.config["bins"],
@@ -129,6 +128,17 @@ class DeadwoodTrainer:
                 name=run_name,
                 config=self.config,
             )
+            self.val_table = wandb.Table(
+                columns=[
+                    "fold",
+                    "epoch",
+                    "biome",
+                    "resolution_bin",
+                    "precision",
+                    "recall",
+                    "f1",
+                ]
+            )
 
     def train(self, fold: int):
         for epoch in range(self.config["epochs"]):
@@ -167,7 +177,7 @@ class DeadwoodTrainer:
                     pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
-            val_loss = self.evaluate(epoch=epoch)
+            val_loss, metrics_df = self.evaluate(epoch=epoch, fold=fold)
             self.scheduler.step(val_loss)
 
             if self.config["use_wandb"]:
@@ -179,13 +189,28 @@ class DeadwoodTrainer:
                         "fold": fold,
                     }
                 )
+                for _, row in metrics_df.iterrows():
+                    self.val_table.add_data(
+                        row["fold"],
+                        row["epoch"],
+                        row["biome"],
+                        row["resolution_bin"],
+                        row["precision"],
+                        row["recall"],
+                        row["f1"],
+                    )
             if self.config["save_checkpoint"]:
                 self.save_checkpoint(fold=fold, epoch=epoch)
 
+        if self.config["use_wandb"]:
+            self.experiment.log({"val_metrics": self.val_table})
+
     @torch.inference_mode()
-    def evaluate(self, epoch: int):
+    def evaluate(self, fold: int, epoch: int):
         self.model.eval()
         epoch_loss = 0
+        confusion = GroupedConfusion()
+
         with torch.autocast(
             self.device.type if self.device.type != "mps" else "cpu",
             enabled=self.config["amp"],
@@ -195,7 +220,7 @@ class DeadwoodTrainer:
                 desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
                 unit="img",
             )
-            for images, masks_true, _ in self.val_loader:
+            for images, masks_true, metas in self.val_loader:
                 images = images.to(
                     device=self.device,
                     dtype=torch.float32,
@@ -208,9 +233,12 @@ class DeadwoodTrainer:
                 masks_pred = self.model(images).squeeze()
                 loss = self.criterion(masks_pred, masks_true.float())
                 epoch_loss += loss.item()
+
+                confusion(masks_pred, masks_true, metas)
                 pbar.update(images.shape[0])
 
-        return epoch_loss / len(self.val_loader)
+        metrics_df = confusion.compute_metrics(fold, epoch)
+        return epoch_loss / len(self.val_loader), metrics_df
 
     def save_checkpoint(self, fold: int, epoch: int):
         run_path = Path(self.config["experiments_dir"]) / self.run_name
