@@ -1,3 +1,5 @@
+from datetime import datetime
+import json
 import os
 import sys
 import numpy as np
@@ -13,16 +15,6 @@ from unet.trainer import DeadwoodTrainer
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--fold", "-f", type=int, default=-1)
-    parser.add_argument("--job_id", "-j", type=str, default="")
-    parser.add_argument("--devices", "-d", type=str, default="0")
-
-    args = parser.parse_args()
-
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.devices
-
-    experiment_name = "50k_512px_60epochs_3fold_bf1_tune_fn"
     config = DeadwoodConfig = {
         "use_wandb": True,
         "save_checkpoint": True,
@@ -47,7 +39,39 @@ if __name__ == "__main__":
         "images_dir": "/net/scratch/jmoehring",
         "register_file": "/net/scratch/jmoehring/tiles_register_biome_bin.csv",
         "random_seed": 10,
-        "job_id": args.job_id,
     }
-    trainer = DeadwoodTrainer(experiment_name, run_fold=args.fold, config=config)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--experiment",
+        "-e",
+        type=str,
+        default=f"unet_deadwood_{datetime.now()}_{os.getpid()}",
+    )
+    parser.add_argument("--fold", "-f", type=int, default=-1)
+    parser.add_argument("--devices", "-d", type=str, default="0")
+    parser.add_argument("--config_path", "-c", type=str, default="config.json")
+    args = parser.parse_args()
+
+    if args.devices:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.devices
+
+    if args.config_path:
+        try:
+            with open(args.config_path, "r") as file:
+                json_config = json.load(file)
+
+            # Update the config with the values from the json file
+            for key, value in json_config.items():
+                if value is not None:
+                    config[key] = value
+
+        except FileNotFoundError:
+            print(f"Config file {args.config} not found.")
+        except json.JSONDecodeError:
+            print(f"Config file {args.config} could not be decoded.")
+
+    trainer = DeadwoodTrainer(
+        run_name=args.experiment, run_fold=args.fold, config=config
+    )
     trainer.run()
