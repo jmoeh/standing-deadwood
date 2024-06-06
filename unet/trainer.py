@@ -41,9 +41,16 @@ class DeadwoodTrainer:
         "random_seed": 100,
     }
 
-    def __init__(self, run_name: str, config=default_config):
+    def __init__(self, run_name: str, run_fold: str, config=default_config):
         self.config = config
         self.run_name = run_name
+        self.run_fold = run_fold
+
+        if run_fold >= 0:
+            self.run_name = f"{run_name}_fold{run_fold}"
+            self.range_folds = [run_fold]
+        else:
+            self.range_folds = range(self.config["no_folds"])
 
     def setup_device(self):
         # preferably use GPU
@@ -137,6 +144,8 @@ class DeadwoodTrainer:
                     "precision",
                     "recall",
                     "f1",
+                    "positives",
+                    "negatives",
                 ]
             )
 
@@ -198,12 +207,11 @@ class DeadwoodTrainer:
                         row["precision"],
                         row["recall"],
                         row["f1"],
+                        row["positives"],
+                        row["negatives"],
                     )
             if self.config["save_checkpoint"]:
                 self.save_checkpoint(fold=fold, epoch=epoch)
-
-        if self.config["use_wandb"]:
-            self.experiment.log({"val_metrics": self.val_table})
 
     @torch.inference_mode()
     def evaluate(self, fold: int, epoch: int):
@@ -257,9 +265,11 @@ class DeadwoodTrainer:
         self.setup_experiment(run_name=self.run_name)
         self.setup_dataset()
 
-        for fold in range(self.config["no_folds"]):
-
+        for fold in self.range_folds:
             self.setup_device()
             self.setup_model()
             self.setup_dataloader(fold=fold)
             self.train(fold=fold)
+
+        if self.config["use_wandb"]:
+            self.experiment.log({"val_metrics": self.val_table})

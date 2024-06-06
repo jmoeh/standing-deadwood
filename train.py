@@ -1,6 +1,7 @@
 import os
 import sys
 import numpy as np
+import argparse
 
 # Add the parent directory to sys.path
 sys.path.append(
@@ -11,17 +12,25 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "u
 from unet.trainer import DeadwoodTrainer
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fold", "-f", type=int, default=-1)
+    parser.add_argument("--job_id", "-j", type=str, default="")
+    parser.add_argument("--devices", "-d", type=str, default="0")
+
+    args = parser.parse_args()
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.devices
 
     experiment_name = "50k_512px_60epochs_3fold_bf1_tune_fn"
     config = DeadwoodConfig = {
         "use_wandb": True,
         "save_checkpoint": True,
-        "epochs": 60,
+        "epochs": 3,
         "no_folds": 3,
-        "batch_size": 120,
-        "epoch_train_samples": 1000,
-        "epoch_val_samples": 1000,
+        "batch_size": 32,
+        "epoch_train_samples": 32,
+        "epoch_val_samples": 32,
         "test_size": 0,
         "balancing_factor": 1,
         "pos_weight": 40.0,
@@ -37,7 +46,8 @@ if __name__ == "__main__":
         "experiments_dir": "/net/home/jmoehring/experiments",
         "images_dir": "/net/scratch/jmoehring",
         "register_file": "/net/scratch/jmoehring/tiles_register_biome_bin.csv",
-        "random_seed": 100,
+        "random_seed": 10,
+        "job_id": args.job_id,
     }
-    trainer = DeadwoodTrainer(experiment_name, config=config)
+    trainer = DeadwoodTrainer(experiment_name, run_fold=args.fold, config=config)
     trainer.run()

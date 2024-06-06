@@ -43,7 +43,7 @@ class GroupedConfusion(nn.Module):
         super(GroupedConfusion, self).__init__()
         self.threshold = threshold
         self.smooth = smooth
-        self.counts = defaultdict(lambda: {"tp": 0, "fp": 0, "fn": 0})
+        self.counts = defaultdict(lambda: {"tp": 0, "fp": 0, "fn": 0, "p": 0, "n": 0})
 
     def forward(self, logits, targets, metas=None):
         probs = torch.sigmoid(logits)
@@ -53,12 +53,11 @@ class GroupedConfusion(nn.Module):
         false_positives = torch.sum((preds == 1) & (targets == 0), dim=(1, 2)).float()
         false_negatives = torch.sum((preds == 0) & (targets == 1), dim=(1, 2)).float()
 
-        for index, (tp, fp, fn) in enumerate(
-            zip(
-                true_positives,
-                false_positives,
-                false_negatives,
-            )
+        positives = torch.sum(targets == 1, dim=(1, 2)).float()
+        negatives = torch.sum(targets == 0, dim=(1, 2)).float()
+
+        for index, (tp, fp, fn, p, n) in enumerate(
+            zip(true_positives, false_positives, false_negatives, positives, negatives)
         ):
             group = (
                 metas["biome"][index].item(),
@@ -67,9 +66,13 @@ class GroupedConfusion(nn.Module):
             self.counts[group]["tp"] += tp.item()
             self.counts[group]["fp"] += fp.item()
             self.counts[group]["fn"] += fn.item()
+            self.counts[group]["p"] += p.item()
+            self.counts[group]["n"] += n.item()
 
     def compute_metrics(self, fold: int, epoch: int):
-        metrics = defaultdict(lambda: {"precision": 0, "recall": 0, "f1": 0})
+        metrics = defaultdict(
+            lambda: {"precision": 0, "recall": 0, "f1": 0, "p": 0, "n": 0}
+        )
         for group, counts in self.counts.items():
             tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
             precision = (tp + self.smooth) / (tp + fp + self.smooth)
@@ -78,6 +81,8 @@ class GroupedConfusion(nn.Module):
             metrics[group]["precision"] = precision
             metrics[group]["recall"] = recall
             metrics[group]["f1"] = f1
+            metrics[group]["p"] = counts["p"]
+            metrics[group]["n"] = counts["n"]
 
         records = []
         for group, metric in metrics.items():
@@ -89,6 +94,8 @@ class GroupedConfusion(nn.Module):
                 "precision": metric["precision"],
                 "recall": metric["recall"],
                 "f1": metric["f1"],
+                "positives": metric["p"],
+                "negatives": metric["n"],
             }
             records.append(record)
 
