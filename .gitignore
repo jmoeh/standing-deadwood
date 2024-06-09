@@ -6,3 +6,4 @@ data/*
 !data/.gitkeep
 __pycache__
 tmp/
+env.json

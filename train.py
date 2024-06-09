@@ -49,7 +49,7 @@ if __name__ == "__main__":
         default=f"unet_deadwood_{datetime.now()}_{os.getpid()}",
     )
     parser.add_argument("--fold", "-f", type=int, default=-1)
-    parser.add_argument("--devices", "-d", type=str, default="0")
+    parser.add_argument("--devices", "-d", type=str)
     parser.add_argument("--config_path", "-c", type=str)
     args = parser.parse_args()
 
