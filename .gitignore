@@ -7,3 +7,4 @@ data/*
 __pycache__
 tmp/
 env.json
+venv3.8
