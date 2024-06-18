@@ -36,7 +36,7 @@ class DeadwoodTrainer:
         model = UNet(n_channels=3, n_classes=1, bilinear=True)
         if torch.cuda.device_count() > 1:
             # train on GPU 1 and 2
-            model = nn.parallel.DistributedDataParallel(model)
+            model = nn.DataParallel(model)
         model = torch.compile(model)
         model.to(device=self.device)
 
