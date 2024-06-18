@@ -16,32 +16,7 @@ from unet.unet_model import UNet
 
 class DeadwoodTrainer:
 
-    default_config = {
-        "use_wandb": True,
-        "save_checkpoint": True,
-        "epochs": 60,
-        "no_folds": 3,
-        "batch_size": 64,
-        "epoch_train_samples": 50000,
-        "epoch_val_samples": 100000,
-        "test_size": 0,
-        "balancing_factor": 1,
-        "pos_weight": 1,
-        "bce_weight": 0.5,
-        "bins": np.arange(0, 0.21, 0.02),
-        "amp": True,
-        "learning_rate": 1e-5,
-        "weight_decay": 1e-8,
-        "momentum": 0.999,
-        "lr_patience": 5,
-        "num_workers": 32,
-        "gradient_clipping": 1.0,
-        "experiments_dir": "/net/home/jmoehring/experiments",
-        "register_file": "/net/scratch/jmoehring/tiles_register_biome_bin.csv",
-        "random_seed": 100,
-    }
-
-    def __init__(self, run_name: str, run_fold: str, config=default_config):
+    def __init__(self, run_name: str, run_fold: str, config):
         self.config = config
         self.run_name = run_name
         self.run_fold = run_fold
@@ -61,8 +36,10 @@ class DeadwoodTrainer:
         model = UNet(n_channels=3, n_classes=1, bilinear=True)
         if torch.cuda.device_count() > 1:
             # train on GPU 1 and 2
-            model = nn.DataParallel(model)
+            model = nn.parallel.DistributedDataParallel(model)
+        model = torch.compile(model)
         model.to(device=self.device)
+
         self.model = model
 
         if self.config["use_wandb"]:
