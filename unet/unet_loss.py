@@ -9,11 +9,11 @@ class DiceLoss(nn.Module):
         super(DiceLoss, self).__init__()
         self.smooth = smooth
 
-    def forward(self, logits, targets):
+    def forward(self, logits, targets, weights):
         logits = torch.sigmoid(logits)
-        intersection = (logits * targets).sum(dim=(2, 3))
-        logits_sum = logits.sum(dim=(2, 3))
-        targets_sum = targets.sum(dim=(2, 3))
+        intersection = (logits * targets * weights).sum(dim=(1, 2))
+        logits_sum = (logits * weights).sum(dim=(1, 2))
+        targets_sum = (targets * weights).sum(dim=(1, 2))
         dice_score = (2.0 * intersection + self.smooth) / (
             logits_sum + targets_sum + self.smooth
         )
@@ -24,14 +24,24 @@ class DiceLoss(nn.Module):
 class BCEDiceLoss(nn.Module):
     def __init__(self, pos_weight=1.0, bce_weight=0.5, smooth=1e-6):
         super(BCEDiceLoss, self).__init__()
-        self.bce = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([pos_weight]))
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
         self.dice = DiceLoss(smooth=smooth)
         self.bce_weight = bce_weight
 
-    def forward(self, logits, targets):
+    def forward(self, logits, targets, weights):
+        # Apply the BCEWithLogitsLoss
         bce_loss = self.bce(logits, targets)
-        dice_loss = self.dice(logits, targets)
-        return self.bce_weight * bce_loss + (1 - self.bce_weight) * dice_loss
+        # Multiply the loss by the weights and reduce
+        weighted_bce_loss = (bce_loss * weights).mean()
+
+        # Calculate the Dice loss with weights
+        dice_loss = self.dice(logits, targets, weights)
+
+        # Combine the weighted BCE and Dice losses
+        total_loss = (
+            self.bce_weight * weighted_bce_loss + (1 - self.bce_weight) * dice_loss
+        )
+        return total_loss
 
 
 class GroupedConfusion(nn.Module):

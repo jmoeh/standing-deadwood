@@ -37,19 +37,16 @@ class DeadwoodTrainer:
         if torch.cuda.device_count() > 1:
             # train on GPU 1 and 2
             model = nn.DataParallel(model)
-        model = torch.compile(model)
+        # model = torch.compile(model)
         model.to(device=self.device)
-
         self.model = model
 
         if self.config["use_wandb"]:
             wandb.watch(model, log="all")
 
-        self.criterion = BCEDiceLoss()
-
-        # loss function (binary cross entropy)
-        self.criterion = nn.BCEWithLogitsLoss(
-            pos_weight=torch.Tensor([self.config["pos_weight"]]).to(device=self.device)
+        self.criterion = BCEDiceLoss(
+            pos_weight=torch.Tensor([self.config["pos_weight"]]).to(self.device, torch.float32),
+            bce_weight=self.config["bce_weight"],
         )
 
         # optimizer
@@ -135,7 +132,7 @@ class DeadwoodTrainer:
                 desc=f"Training: Epoch {epoch}/{self.config['epochs']}",
                 unit="img",
             )
-            for images, masks_true, _ in self.train_loader:
+            for images, masks_true, masks_weights, _ in self.train_loader:
                 images = images.to(
                     device=self.device,
                     dtype=torch.float32,
@@ -144,13 +141,20 @@ class DeadwoodTrainer:
                 masks_true = masks_true.to(
                     device=self.device, dtype=torch.long
                 ).squeeze()
+                masks_weights = masks_weights.to(
+                    device=self.device, dtype=torch.uint8
+                ).squeeze()
 
                 with torch.amp.autocast(
                     self.device.type if self.device.type != "mps" else "cpu",
                     enabled=self.config["amp"],
                 ):
                     masks_pred = self.model(images).squeeze(1)
-                    loss = self.criterion(masks_pred.squeeze(1), masks_true.float())
+                    loss = self.criterion(
+                        masks_pred.squeeze(1),
+                        masks_true.float(),
+                        masks_weights.squeeze(1),
+                    )
                     self.optimizer.zero_grad(set_to_none=True)
                     self.grad_scaler.scale(loss).backward()
                     torch.nn.utils.clip_grad.clip_grad_norm_(
@@ -205,7 +209,7 @@ class DeadwoodTrainer:
                 desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
                 unit="img",
             )
-            for images, masks_true, metas in self.val_loader:
+            for images, masks_true, masks_weights, metas in self.val_loader:
                 images = images.to(
                     device=self.device,
                     dtype=torch.float32,
@@ -214,9 +218,14 @@ class DeadwoodTrainer:
                 masks_true = masks_true.to(
                     device=self.device, dtype=torch.long
                 ).squeeze()
+                masks_weights = masks_weights.to(
+                    device=self.device, dtype=torch.uint8
+                ).squeeze()
 
                 masks_pred = self.model(images).squeeze()
-                loss = self.criterion(masks_pred, masks_true.float())
+                loss = self.criterion(
+                    masks_pred, masks_true.float(), masks_weights.squeeze(1)
+                )
                 epoch_loss += loss.item()
 
                 confusion(masks_pred, masks_true, metas)

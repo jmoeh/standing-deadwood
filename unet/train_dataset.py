@@ -18,11 +18,13 @@ class DeadwoodDataset(Dataset):
         random_seed=1,
         test_size=0.2,
         bins=np.arange(0, 0.21, 0.02),
+        nodata_value=255,
     ):
         super(DeadwoodDataset, self).__init__()
         self.register_df = register_df
         self.random_seed = random_seed
         self.images_dir = images_dir
+        self.nodata_value = nodata_value
 
         random.seed(self.random_seed)
         np.random.seed(self.random_seed)
@@ -135,7 +137,17 @@ class DeadwoodDataset(Dataset):
                     mask_transforms(mask_tensor).squeeze(0).long().contiguous()
                 )
 
-                return image_tensor, mask_tensor, self.register_df.iloc[index].to_dict()
+                weight_tensor = torch.ones_like(mask_tensor, dtype=torch.float32)
+                weight_tensor[mask_tensor == self.nodata_value] = (
+                    0  # Assign weight 0 to 'nodata' areas
+                )
+
+                return (
+                    image_tensor,
+                    mask_tensor,
+                    weight_tensor,
+                    self.register_df.iloc[index].to_dict(),
+                )
             except:
                 print(f"skipping image {image_path}")
                 index = (index + 1) % len(self.register_df)
