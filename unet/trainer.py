@@ -191,6 +191,10 @@ class DeadwoodTrainer:
                         row["positives"],
                         row["negatives"],
                     )
+                step = epoch + fold * self.config["epochs"]
+                self.experiment.log({
+                    f"val_metrics_fold_step_{step}": self.val_table,
+                })
             if self.config["save_checkpoint"]:
                 self.save_checkpoint(fold=fold, epoch=epoch)
 
