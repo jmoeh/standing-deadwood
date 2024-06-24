@@ -12,6 +12,7 @@ from tqdm import tqdm
 from unet.train_dataset import DeadwoodDataset
 from unet.unet_loss import BCEDiceLoss, GroupedConfusion
 from unet.unet_model import UNet
+import segmentation_models_pytorch as smp
 
 
 class DeadwoodTrainer:
@@ -33,11 +34,22 @@ class DeadwoodTrainer:
 
     def setup_model(self):
         # model with three input channels (RGB)
-        model = UNet(n_channels=3, n_classes=1, bilinear=True)
+        model = smp.Unet(
+            encoder_name=self.config[
+                "encoder_name"
+            ],  # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
+            encoder_weights=self.config[
+                "encoder_weights"
+            ],  # use `imagenet` pre-trained weights for encoder initialization
+            in_channels=3,  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
+            classes=1,  # model output channels (number of classes in your dataset)
+        )
+
         if torch.cuda.device_count() > 1:
             # train on GPU 1 and 2
             model = nn.DataParallel(model)
-        # model = torch.compile(model)
+
+        model = torch.compile(model)
         model.to(device=self.device)
         self.model = model
 
@@ -45,7 +57,9 @@ class DeadwoodTrainer:
             wandb.watch(model, log="all")
 
         self.criterion = BCEDiceLoss(
-            pos_weight=torch.Tensor([self.config["pos_weight"]]).to(self.device, torch.float32),
+            pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
+                self.device, torch.float32
+            ),
             bce_weight=self.config["bce_weight"],
         )
 
@@ -192,9 +206,13 @@ class DeadwoodTrainer:
                         row["negatives"],
                     )
                 step = epoch + fold * self.config["epochs"]
-                self.experiment.log({
-                    f"val_metrics_fold_step_{step}": self.val_table,
-                })
+                self.experiment.log(
+                    {
+                        f"val_metrics_fold_step_{step}": wandb.Table(
+                            dataframe=metrics_df
+                        ),
+                    }
+                )
             if self.config["save_checkpoint"]:
                 self.save_checkpoint(fold=fold, epoch=epoch)
 
