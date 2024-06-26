@@ -16,13 +16,13 @@ from unet.trainer import DeadwoodTrainer
 if __name__ == "__main__":
 
     config = DeadwoodConfig = {
-        "use_wandb": False,
-        "save_checkpoint": False,
+        "use_wandb": True,
+        "save_checkpoint": True,
         "epochs": 1,
         "no_folds": 3,
         "batch_size": 16,
         "epoch_train_samples": 100,
-        "epoch_val_samples": 100,
+        "epoch_val_samples": 0,
         "test_size": 0,
         "balancing_factor": 1,
         "pos_weight": 12,

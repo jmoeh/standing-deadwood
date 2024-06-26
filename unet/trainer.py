@@ -46,10 +46,9 @@ class DeadwoodTrainer:
         )
 
         if torch.cuda.device_count() > 1:
-            # train on GPU 1 and 2
             model = nn.DataParallel(model)
 
-        model = torch.compile(model)
+        # model = torch.compile(model)
         model.to(device=self.device)
         self.model = model
 
