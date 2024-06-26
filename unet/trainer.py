@@ -17,14 +17,13 @@ import segmentation_models_pytorch as smp
 
 class DeadwoodTrainer:
 
-    def __init__(self, run_name: str, run_fold: str, config):
+    def __init__(self, run_name: str, config):
         self.config = config
         self.run_name = run_name
-        self.run_fold = run_fold
 
-        if run_fold >= 0:
-            self.run_name = f"{run_name}_fold{run_fold}"
-            self.range_folds = [run_fold]
+        if self.config["run_fold"] >= 0:
+            self.run_name = f"{run_name}_fold{self.config["run_fold"]}"
+            self.range_folds = [self.config["run_fold"]]
         else:
             self.range_folds = range(self.config["no_folds"])
 

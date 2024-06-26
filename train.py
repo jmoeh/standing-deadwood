@@ -20,6 +20,7 @@ if __name__ == "__main__":
         "save_checkpoint": True,
         "epochs": 1,
         "no_folds": 3,
+        "run_fold": -1,
         "batch_size": 16,
         "epoch_train_samples": 100,
         "epoch_val_samples": 0,
@@ -50,7 +51,6 @@ if __name__ == "__main__":
         type=str,
         default=f"unet_deadwood_{datetime.now()}_{os.getpid()}",
     )
-    parser.add_argument("--fold", "-f", type=int, default=-1)
     parser.add_argument("--devices", "-d", type=str)
     parser.add_argument("--config_path", "-c", type=str)
     args = parser.parse_args()
@@ -73,7 +73,5 @@ if __name__ == "__main__":
         except json.JSONDecodeError:
             print(f"Config file {args.config} could not be decoded.")
 
-    trainer = DeadwoodTrainer(
-        run_name=args.experiment, run_fold=args.fold, config=config
-    )
+    trainer = DeadwoodTrainer(run_name=args.experiment, config=config)
     trainer.run()
