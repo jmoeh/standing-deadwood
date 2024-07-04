@@ -22,7 +22,7 @@ class DeadwoodTrainer:
         self.run_name = run_name
 
         if self.config["run_fold"] >= 0:
-            self.run_name = f"{run_name}_fold{self.config["run_fold"]}"
+            self.run_name = f"{run_name}_fold{self.config['run_fold']}"
             self.range_folds = [self.config["run_fold"]]
         else:
             self.range_folds = range(self.config["no_folds"])

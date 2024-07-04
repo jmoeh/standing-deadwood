@@ -48,7 +48,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--devices", "-d", type=str)
     parser.add_argument("--config_path", "-c", type=str)
-    parser.add_argument("--fold", "-c", type=int)
+    parser.add_argument("--fold", "-f", type=int)
     args = parser.parse_args()
 
     if args.devices:
@@ -68,7 +68,7 @@ if __name__ == "__main__":
             print(f"Config file {args.config} not found.")
         except json.JSONDecodeError:
             print(f"Config file {args.config} could not be decoded.")
-    
+
     if args.fold:
         config["run_fold"] = args.fold
 
