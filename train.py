@@ -16,6 +16,7 @@ from unet.trainer import DeadwoodTrainer
 if __name__ == "__main__":
 
     config = DeadwoodConfig = {
+        "experiment_name": "experiment",
         "use_wandb": True,
         "save_checkpoint": True,
         "epochs": 1,
@@ -45,14 +46,9 @@ if __name__ == "__main__":
     }
 
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--experiment",
-        "-e",
-        type=str,
-        default=f"unet_deadwood_{datetime.now()}_{os.getpid()}",
-    )
     parser.add_argument("--devices", "-d", type=str)
     parser.add_argument("--config_path", "-c", type=str)
+    parser.add_argument("--fold", "-c", type=int)
     args = parser.parse_args()
 
     if args.devices:
@@ -72,6 +68,9 @@ if __name__ == "__main__":
             print(f"Config file {args.config} not found.")
         except json.JSONDecodeError:
             print(f"Config file {args.config} could not be decoded.")
+    
+    if args.fold:
+        config["run_fold"] = args.fold
 
-    trainer = DeadwoodTrainer(run_name=args.experiment, config=config)
+    trainer = DeadwoodTrainer(run_name=config["experiment_name"], config=config)
     trainer.run()
