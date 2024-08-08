@@ -1,17 +1,16 @@
-from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import wandb
 from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
+from accelerate import DistributedDataParallelKwargs
 from tqdm import tqdm
+from accelerate import Accelerator
 
 from unet.train_dataset import DeadwoodDataset
 from unet.unet_loss import BCEDiceLoss, GroupedConfusion
-from unet.unet_model import UNet
 import segmentation_models_pytorch as smp
 
 
@@ -20,6 +19,11 @@ class DeadwoodTrainer:
     def __init__(self, run_name: str, config):
         self.config = config
         self.run_name = run_name
+        self.accelerator = Accelerator(
+            kwargs_handlers=[
+                DistributedDataParallelKwargs(find_unused_parameters=True)
+            ],
+        )
 
         if self.config["run_fold"] >= 0:
             self.run_name = f"{run_name}_fold{self.config['run_fold']}"
@@ -28,51 +32,30 @@ class DeadwoodTrainer:
             self.range_folds = range(self.config["no_folds"])
 
     def setup_device(self):
-        # preferably use GPU
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = self.accelerator.device
 
     def setup_model(self):
-        # model with three input channels (RGB)
         model = smp.Unet(
-            encoder_name=self.config[
-                "encoder_name"
-            ],  # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
-            encoder_weights=self.config[
-                "encoder_weights"
-            ],  # use `imagenet` pre-trained weights for encoder initialization
-            in_channels=3,  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
-            classes=1,  # model output channels (number of classes in your dataset)
+            encoder_name=self.config["encoder_name"],
+            encoder_weights=self.config["encoder_weights"],
+            in_channels=3,
+            classes=1,
         )
-
-        if torch.cuda.device_count() > 1:
-            model = nn.DataParallel(model)
-
-        # model = torch.compile(model)
-        model.to(device=self.device)
-        self.model = model
-
-        if self.config["use_wandb"]:
-            wandb.watch(model, log="all")
-
+        self.model = model.to(self.device)
         self.criterion = BCEDiceLoss(
             pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
                 self.device, torch.float32
             ),
             bce_weight=self.config["bce_weight"],
         )
-
-        # optimizer
         self.optimizer = torch.optim.RMSprop(
-            model.parameters(),
+            self.model.parameters(),
             lr=self.config["learning_rate"],
             weight_decay=self.config["weight_decay"],
             momentum=self.config["momentum"],
         )
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, "min", patience=self.config["lr_patience"]
-        )
-        self.grad_scaler = torch.cuda.amp.grad_scaler.GradScaler(
-            enabled=self.config["amp"]
         )
 
     def setup_dataset(self):
@@ -88,10 +71,11 @@ class DeadwoodTrainer:
 
     def setup_dataloader(self, fold: int):
         train_set, val_set = self.dataset.get_train_val_fold(fold)
+
         train_sampler = WeightedRandomSampler(
             self.dataset.get_train_sample_weights(
                 fold=fold, balancing_factor=self.config["balancing_factor"]
-            ).tolist(),  # Convert tensor to sequence of floats
+            ).tolist(),
             self.config["epoch_train_samples"],
             replacement=False,
         )
@@ -109,6 +93,15 @@ class DeadwoodTrainer:
                 val_set, replacement=False, num_samples=self.config["epoch_val_samples"]
             )
             self.val_loader = DataLoader(val_set, sampler=val_sampler, **loader_args)
+
+    def setup_accelerator(self):
+        model, optimizer, train_loader, val_loader = self.accelerator.prepare(
+            self.model, self.optimizer, self.train_loader, self.val_loader
+        )
+        self.model = model
+        self.optimizer = optimizer
+        self.train_loader = train_loader
+        self.val_loader = val_loader
 
     def setup_experiment(self, run_name: str):
         self.run_dir = Path(self.config["experiments_dir"]) / run_name
@@ -145,38 +138,20 @@ class DeadwoodTrainer:
                 unit="img",
             )
             for images, masks_true, masks_weights, _ in self.train_loader:
-                images = images.to(
-                    device=self.device,
-                    dtype=torch.float32,
-                    memory_format=torch.channels_last,
+                self.optimizer.zero_grad()
+
+                masks_pred = self.model(images)
+                loss = self.criterion(
+                    masks_pred.squeeze(1),
+                    masks_true.float(),
+                    masks_weights.squeeze(1),
                 )
-                masks_true = masks_true.to(
-                    device=self.device, dtype=torch.long
-                ).squeeze()
-                masks_weights = masks_weights.to(
-                    device=self.device, dtype=torch.uint8
-                ).squeeze()
 
-                with torch.amp.autocast(
-                    self.device.type if self.device.type != "mps" else "cpu",
-                    enabled=self.config["amp"],
-                ):
-                    masks_pred = self.model(images).squeeze(1)
-                    loss = self.criterion(
-                        masks_pred.squeeze(1),
-                        masks_true.float(),
-                        masks_weights.squeeze(1),
-                    )
-                    self.optimizer.zero_grad(set_to_none=True)
-                    self.grad_scaler.scale(loss).backward()
-                    torch.nn.utils.clip_grad.clip_grad_norm_(
-                        self.model.parameters(), self.config["gradient_clipping"]
-                    )
-                    self.grad_scaler.step(self.optimizer)
-                    self.grad_scaler.update()
+                self.accelerator.backward(loss)
+                self.optimizer.step()
 
-                    epoch_loss += loss.item()
-                    pbar.update(images.shape[0])
+                epoch_loss += loss.item()
+                pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
             val_loss, metrics_df = self.evaluate(epoch=epoch, fold=fold)
@@ -203,14 +178,7 @@ class DeadwoodTrainer:
                         row["positives"],
                         row["negatives"],
                     )
-                step = epoch + fold * self.config["epochs"]
-                self.experiment.log(
-                    {
-                        f"val_metrics_fold_step_{step}": wandb.Table(
-                            dataframe=metrics_df
-                        ),
-                    }
-                )
+
             if self.config["save_checkpoint"]:
                 self.save_checkpoint(fold=fold, epoch=epoch)
 
@@ -220,52 +188,42 @@ class DeadwoodTrainer:
         epoch_loss = 0
         confusion = GroupedConfusion()
 
-        with torch.autocast(
-            self.device.type if self.device.type != "mps" else "cpu",
-            enabled=self.config["amp"],
-        ):
-            pbar = tqdm(
-                total=len(self.val_loader) * self.config["batch_size"],
-                desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
-                unit="img",
+        pbar = tqdm(
+            total=len(self.val_loader) * self.config["batch_size"],
+            desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
+            unit="img",
+        )
+        for images, masks_true, masks_weights, metas in self.val_loader:
+            masks_pred = self.model(images).squeeze()
+            
+            all_gathered = self.accelerator.gather_for_metrics(
+                (masks_pred, masks_true, masks_weights, metas),
             )
-            for images, masks_true, masks_weights, metas in self.val_loader:
-                images = images.to(
-                    device=self.device,
-                    dtype=torch.float32,
-                    memory_format=torch.channels_last,
-                )
-                masks_true = masks_true.to(
-                    device=self.device, dtype=torch.long
-                ).squeeze()
-                masks_weights = masks_weights.to(
-                    device=self.device, dtype=torch.uint8
-                ).squeeze()
+            # Print the length and elements to debug
+            print(f"Number of elements returned: {len(all_gathered)}")
+            # print(f"Elements returned: {all_gathered}")
 
-                masks_pred = self.model(images).squeeze()
-                loss = self.criterion(
-                    masks_pred, masks_true.float(), masks_weights.squeeze(1)
-                )
-                epoch_loss += loss.item()
+            # loss = self.criterion(
+            #     all_masks_pred,
+            #     all_masks_true.squeeze().float(),
+            #     all_masks_weights.squeeze(),
+            # )
+            # epoch_loss += loss.item()
 
-                confusion(masks_pred, masks_true, metas)
-                pbar.update(images.shape[0])
+            # confusion(all_masks_pred, all_masks_true, all_metas)
+            pbar.update(images.shape[0])
 
         metrics_df = confusion.compute_metrics(fold, epoch)
         return epoch_loss / len(self.val_loader), metrics_df
 
     def save_checkpoint(self, fold: int, epoch: int):
-        run_path = Path(self.config["experiments_dir"]) / self.run_name
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "scheduler_state_dict": self.scheduler.state_dict(),
-                "grad_scaler_state_dict": self.grad_scaler.state_dict(),
-            },
-            run_path / f"fold_{fold}_epoch_{epoch}.pt",
+        checkpoint_path = (
+            Path(self.config["experiments_dir"])
+            / self.run_name
+            / f"fold_{fold}_epoch_{epoch}"
         )
+        self.accelerator.wait_for_everyone()
+        self.accelerator.save(self.model.state_dict(), checkpoint_path)
 
     def run(self):
         self.setup_experiment(run_name=self.run_name)
@@ -275,6 +233,7 @@ class DeadwoodTrainer:
             self.setup_device()
             self.setup_model()
             self.setup_dataloader(fold=fold)
+            self.setup_accelerator()
             self.train(fold=fold)
 
         if self.config["use_wandb"]:

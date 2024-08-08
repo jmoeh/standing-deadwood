@@ -16,15 +16,15 @@ from unet.trainer import DeadwoodTrainer
 if __name__ == "__main__":
 
     config = DeadwoodConfig = {
-        "experiment_name": "experiment",
-        "use_wandb": True,
+        "experiment_name": "test_accelerate",
+        "use_wandb": False,
         "save_checkpoint": True,
         "epochs": 1,
         "no_folds": 3,
         "run_fold": -1,
         "batch_size": 16,
-        "epoch_train_samples": 100,
-        "epoch_val_samples": 0,
+        "epoch_train_samples": 128,
+        "epoch_val_samples": 128,
         "test_size": 0,
         "balancing_factor": 1,
         "pos_weight": 12,
