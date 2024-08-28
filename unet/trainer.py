@@ -9,9 +9,9 @@ import wandb
 from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
 from tqdm import tqdm
 
+from accelerate import Accelerator
 from unet.train_dataset import DeadwoodDataset
 from unet.unet_loss import BCEDiceLoss, GroupedConfusion
-from unet.unet_model import UNet
 import segmentation_models_pytorch as smp
 
 
@@ -28,20 +28,18 @@ class DeadwoodTrainer:
             self.range_folds = range(self.config["no_folds"])
 
     def setup_device(self):
-        # preferably use GPU
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.accelerator = Accelerator()
+        self.device = self.accelerator.device
 
     def setup_model(self):
         # model with three input channels (RGB)
-        model = UNet(
-            n_channels=3,
-            n_classes=1,
+        model = smp.Unet(
+            encoder_name=self.config["encoder_name"],
+            encoder_weights=self.config["encoder_weights"],
+            in_channels=3,
+            classes=1,
         )
 
-        if torch.cuda.device_count() > 1:
-            model = nn.DataParallel(model)
-
-        # model = torch.compile(model)
         model.to(device=self.device)
         self.model = model
 
@@ -64,9 +62,6 @@ class DeadwoodTrainer:
         )
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, "min", patience=self.config["lr_patience"]
-        )
-        self.grad_scaler = torch.cuda.amp.grad_scaler.GradScaler(
-            enabled=self.config["amp"]
         )
 
     def setup_dataset(self):
@@ -129,6 +124,15 @@ class DeadwoodTrainer:
                 ]
             )
 
+    def setup_accelerator(self):
+        model, optimizer, train_loader, scheduler = self.accelerator.prepare(
+            self.model, self.optimizer, self.train_loader, self.scheduler
+        )
+        self.model = model
+        self.optimizer = optimizer
+        self.train_loader = train_loader
+        self.scheduler = scheduler
+
     def train(self, fold: int):
         for epoch in range(self.config["epochs"]):
             self.model.train()
@@ -140,16 +144,11 @@ class DeadwoodTrainer:
             )
             for images, masks_true, masks_weights, _ in self.train_loader:
                 images = images.to(
-                    device=self.device,
                     dtype=torch.float32,
                     memory_format=torch.channels_last,
                 )
-                masks_true = masks_true.to(
-                    device=self.device, dtype=torch.long
-                ).squeeze()
-                masks_weights = masks_weights.to(
-                    device=self.device, dtype=torch.uint8
-                ).squeeze()
+                masks_true = masks_true.to(dtype=torch.long).squeeze()
+                masks_weights = masks_weights.to(dtype=torch.uint8).squeeze()
 
                 with torch.amp.autocast(
                     self.device.type if self.device.type != "mps" else "cpu",
@@ -162,12 +161,10 @@ class DeadwoodTrainer:
                         masks_weights.squeeze(1),
                     )
                     self.optimizer.zero_grad(set_to_none=True)
-                    self.grad_scaler.scale(loss).backward()
+                    self.accelerator.backward(loss)
                     torch.nn.utils.clip_grad.clip_grad_norm_(
                         self.model.parameters(), self.config["gradient_clipping"]
                     )
-                    self.grad_scaler.step(self.optimizer)
-                    self.grad_scaler.update()
 
                     epoch_loss += loss.item()
                     pbar.update(images.shape[0])
@@ -256,7 +253,6 @@ class DeadwoodTrainer:
                 "model_state_dict": self.model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict(),
-                "grad_scaler_state_dict": self.grad_scaler.state_dict(),
             },
             run_path / f"fold_{fold}_epoch_{epoch}.pt",
         )
