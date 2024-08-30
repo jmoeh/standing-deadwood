@@ -156,17 +156,16 @@ class DeadwoodDataset(Dataset):
                 mask_tensor = (
                     mask_transforms(mask_tensor).squeeze(0).long().contiguous()
                 )
-
                 weight_tensor = torch.ones_like(mask_tensor, dtype=torch.float32)
                 weight_tensor[mask_tensor == self.nodata_value] = (
                     0  # Assign weight 0 to 'nodata' areas
                 )
-
+                index_tensor = torch.tensor(index, dtype=torch.int64)   
                 return (
                     image_tensor,
                     mask_tensor,
                     weight_tensor,
-                    self.register_df.iloc[index].to_dict(),
+                    index_tensor,
                 )
             except:
                 print(f"skipping image {image_path}")

@@ -9,9 +9,9 @@ import wandb
 from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
 from tqdm import tqdm
 
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from unet.train_dataset import DeadwoodDataset
-from unet.unet_loss import BCEDiceLoss, GroupedConfusion
+from unet.unet_loss import BCEDiceLoss,PrecisionRecallF1
 import segmentation_models_pytorch as smp
 
 
@@ -20,15 +20,17 @@ class DeadwoodTrainer:
     def __init__(self, run_name: str, config):
         self.config = config
         self.run_name = run_name
-
+        self.run_path = Path(self.config["experiments_dir"]) / self.run_name
+        
         if self.config["run_fold"] >= 0:
             self.run_name = f"{run_name}_fold{self.config['run_fold']}"
             self.range_folds = [self.config["run_fold"]]
         else:
             self.range_folds = range(self.config["no_folds"])
+        
 
     def setup_device(self):
-        self.accelerator = Accelerator()
+        self.accelerator = Accelerator(kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)], log_with="wandb", project_dir=self.config["experiments_dir"])
         self.device = self.accelerator.device
 
     def setup_model(self):
@@ -42,9 +44,6 @@ class DeadwoodTrainer:
 
         model.to(device=self.device)
         self.model = model
-
-        if self.config["use_wandb"]:
-            wandb.watch(model, log="all")
 
         self.criterion = BCEDiceLoss(
             pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
@@ -104,33 +103,31 @@ class DeadwoodTrainer:
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         if self.config["use_wandb"]:
-            self.experiment = wandb.init(
-                project="standing-deadwood-unet-pro",
-                resume="allow",
-                name=run_name,
-                config=self.config,
-            )
-            self.val_table = wandb.Table(
-                columns=[
-                    "fold",
-                    "epoch",
-                    "biome",
-                    "resolution_bin",
-                    "precision",
-                    "recall",
-                    "f1",
-                    "positives",
-                    "negatives",
-                ]
-            )
+            self.accelerator.init_trackers("standing-deadwood-unet-pro", config=self.config)
+            # self.val_table = wandb.Table(
+            #     columns=[
+            #         "fold",
+            #         "epoch",
+            #         "biome",
+            #         "resolution_bin",
+            #         "precision",
+            #         "recall",
+            #         "f1",
+            #         "positives",
+            #         "negatives",
+            #     ]
+            # )
 
     def setup_accelerator(self):
         model, optimizer, train_loader, scheduler = self.accelerator.prepare(
             self.model, self.optimizer, self.train_loader, self.scheduler
         )
+        val_loader = self.accelerator.prepare(self.val_loader)
+        
         self.model = model
         self.optimizer = optimizer
         self.train_loader = train_loader
+        self.val_loader = val_loader
         self.scheduler = scheduler
 
     def train(self, fold: int):
@@ -170,11 +167,11 @@ class DeadwoodTrainer:
                     pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
-            val_loss, metrics_df = self.evaluate(epoch=epoch, fold=fold)
+            val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
             self.scheduler.step(val_loss)
 
             if self.config["use_wandb"]:
-                self.experiment.log(
+                self.accelerator.log(
                     {
                         "train_loss": train_loss,
                         "val_loss": val_loss,
@@ -182,26 +179,7 @@ class DeadwoodTrainer:
                         "fold": fold,
                     }
                 )
-                for _, row in metrics_df.iterrows():
-                    self.val_table.add_data(
-                        row["fold"],
-                        row["epoch"],
-                        row["biome"],
-                        row["resolution_bin"],
-                        row["precision"],
-                        row["recall"],
-                        row["f1"],
-                        row["positives"],
-                        row["negatives"],
-                    )
-                step = epoch + fold * self.config["epochs"]
-                self.experiment.log(
-                    {
-                        f"val_metrics_fold_step_{step}": wandb.Table(
-                            dataframe=metrics_df
-                        ),
-                    }
-                )
+
             if self.config["save_checkpoint"]:
                 self.save_checkpoint(fold=fold, epoch=epoch)
 
@@ -209,63 +187,55 @@ class DeadwoodTrainer:
     def evaluate(self, fold: int, epoch: int):
         self.model.eval()
         epoch_loss = 0
-        confusion = GroupedConfusion()
 
-        with torch.autocast(
-            self.device.type if self.device.type != "mps" else "cpu",
-            enabled=self.config["amp"],
-        ):
-            pbar = tqdm(
-                total=len(self.val_loader) * self.config["batch_size"],
-                desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
-                unit="img",
+        pbar = tqdm(
+            total=len(self.val_loader) * self.config["batch_size"],
+            desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
+            unit="img",
+        )
+        
+        for images, masks_true, masks_weights, indexes in self.val_loader:
+            images = images.to(
+                dtype=torch.float32,
+                memory_format=torch.channels_last,
             )
-            for images, masks_true, masks_weights, metas in self.val_loader:
-                images = images.to(
-                    device=self.device,
-                    dtype=torch.float32,
-                    memory_format=torch.channels_last,
-                )
-                masks_true = masks_true.to(
-                    device=self.device, dtype=torch.long
-                ).squeeze()
-                masks_weights = masks_weights.to(
-                    device=self.device, dtype=torch.uint8
-                ).squeeze()
+            masks_true = masks_true.to(dtype=torch.long).squeeze()
+            masks_weights = masks_weights.to(dtype=torch.uint8).squeeze()
+            masks_pred = self.model(images).squeeze()
+            
+            all_masks_true = self.accelerator.gather(masks_true)
+            all_masks_pred = self.accelerator.gather(masks_pred)
+            all_masks_weights = self.accelerator.gather(masks_weights)
+            all_indexes = self.accelerator.gather(indexes)
+            
+            loss = self.criterion(
+                all_masks_pred, all_masks_true.float(), all_masks_weights.squeeze(1)
+            )
+            epoch_loss += loss.item()
+            all_precision, all_recall, all_f1 = PrecisionRecallF1()(all_masks_true, all_masks_pred, all_masks_weights)
+            
+            all_metrics = torch.cat((all_precision, all_recall, all_f1, all_indexes.unsqueeze(1).cpu()), dim=1)
+            print(all_metrics.shape)
+            
+            pbar.update(images.shape[0])
 
-                masks_pred = self.model(images).squeeze()
-                loss = self.criterion(
-                    masks_pred, masks_true.float(), masks_weights.squeeze(1)
-                )
-                epoch_loss += loss.item()
-
-                confusion(masks_pred, masks_true, metas)
-                pbar.update(images.shape[0])
-
-        metrics_df = confusion.compute_metrics(fold, epoch)
-        return epoch_loss / len(self.val_loader), metrics_df
+        return epoch_loss / len(self.val_loader), all_metrics
 
     def save_checkpoint(self, fold: int, epoch: int):
-        run_path = Path(self.config["experiments_dir"]) / self.run_name
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "scheduler_state_dict": self.scheduler.state_dict(),
-            },
-            run_path / f"fold_{fold}_epoch_{epoch}.pt",
-        )
+        checkpoint_name = f"{self.run_path}/fold_{fold}_epoch_{epoch}"
+        self.accelerator.save_state(output_dir=checkpoint_name)
+        
 
     def run(self):
+        self.setup_device()
         self.setup_experiment(run_name=self.run_name)
         self.setup_dataset()
 
         for fold in self.range_folds:
-            self.setup_device()
             self.setup_model()
             self.setup_dataloader(fold=fold)
+            self.setup_accelerator()
             self.train(fold=fold)
 
-        if self.config["use_wandb"]:
-            self.experiment.log({"val_metrics": self.val_table})
+        # if self.config["use_wandb"]:
+        #     self.experiment.log({"val_metrics": self.val_table})

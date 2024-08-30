@@ -42,72 +42,45 @@ class BCEDiceLoss(nn.Module):
             self.bce_weight * weighted_bce_loss + (1 - self.bce_weight) * dice_loss
         )
         return total_loss
+    
 
+class PrecisionRecallF1(nn.Module):
+    def __init__(self, thresholds=None, smooth=1e-8):
+        super(PrecisionRecallF1, self).__init__()
+        if thresholds is None:
+            thresholds = torch.arange(0.1, 1.0, 0.1)
+        self.thresholds = thresholds  # List of thresholds to evaluate
+        self.smooth = smooth  # Small constant to prevent division by zero
 
-class GroupedConfusion(nn.Module):
-    def __init__(
-        self,
-        threshold=0.5,
-        smooth=1e-6,
-    ):
-        super(GroupedConfusion, self).__init__()
-        self.threshold = threshold
-        self.smooth = smooth
-        self.counts = defaultdict(lambda: {"tp": 0, "fp": 0, "fn": 0, "p": 0, "n": 0})
+    def forward(self, true_masks, predicted_masks, weight_masks):
+        batch_size = true_masks.size(0)
+        num_thresholds = len(self.thresholds)
+        
+        # Prepare tensors to hold precision, recall, and F1 scores
+        precision = torch.zeros(batch_size, num_thresholds)
+        recall = torch.zeros(batch_size, num_thresholds)
+        f1 = torch.zeros(batch_size, num_thresholds)
+        
+        # Iterate over each threshold
+        for i, threshold in enumerate(self.thresholds):
+            # Binarize the masks based on the current threshold
+            true_masks_bin = (true_masks > threshold).float()
+            predicted_masks_bin = (predicted_masks > threshold).float()
+            weight_masks_bin = (weight_masks > threshold).float()
 
-    def forward(self, logits, targets, metas=None):
-        probs = torch.sigmoid(logits)
-        preds = (probs > self.threshold).float()
+            # Element-wise multiplication to consider only weighted areas
+            true_masks_weighted = true_masks_bin * weight_masks_bin
+            predicted_masks_weighted = predicted_masks_bin * weight_masks_bin
 
-        true_positives = torch.sum((preds == 1) & (targets == 1), dim=(1, 2)).float()
-        false_positives = torch.sum((preds == 1) & (targets == 0), dim=(1, 2)).float()
-        false_negatives = torch.sum((preds == 0) & (targets == 1), dim=(1, 2)).float()
+            # Compute true positives, false positives, false negatives
+            tp = (predicted_masks_weighted * true_masks_weighted).sum(dim=(1, 2))
+            fp = (predicted_masks_weighted * (1 - true_masks_weighted)).sum(dim=(1, 2))
+            fn = ((1 - predicted_masks_weighted) * true_masks_weighted).sum(dim=(1, 2))
 
-        positives = torch.sum(targets == 1, dim=(1, 2)).float()
-        negatives = torch.sum(targets == 0, dim=(1, 2)).float()
+            # Calculate precision, recall, and F1 score
+            precision[:, i] = tp / (tp + fp + self.smooth)
+            recall[:, i] = tp / (tp + fn + self.smooth)
+            f1[:, i] = 2 * precision[:, i] * recall[:, i] / (precision[:, i] + recall[:, i] + self.smooth)
 
-        for index, (tp, fp, fn, p, n) in enumerate(
-            zip(true_positives, false_positives, false_negatives, positives, negatives)
-        ):
-            group = (
-                metas["biome"][index].item(),
-                metas["resolution_bin"][index].item(),
-            )
-            self.counts[group]["tp"] += tp.item()
-            self.counts[group]["fp"] += fp.item()
-            self.counts[group]["fn"] += fn.item()
-            self.counts[group]["p"] += p.item()
-            self.counts[group]["n"] += n.item()
+        return precision, recall, f1
 
-    def compute_metrics(self, fold: int, epoch: int):
-        metrics = defaultdict(
-            lambda: {"precision": 0, "recall": 0, "f1": 0, "p": 0, "n": 0}
-        )
-        for group, counts in self.counts.items():
-            tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
-            precision = (tp + self.smooth) / (tp + fp + self.smooth)
-            recall = (tp + self.smooth) / (tp + fn + self.smooth)
-            f1 = 2 * (precision * recall) / (precision + recall + self.smooth)
-            metrics[group]["precision"] = precision
-            metrics[group]["recall"] = recall
-            metrics[group]["f1"] = f1
-            metrics[group]["p"] = counts["p"]
-            metrics[group]["n"] = counts["n"]
-
-        records = []
-        for group, metric in metrics.items():
-            record = {
-                "fold": fold,
-                "epoch": epoch,
-                "biome": group[0],
-                "resolution_bin": group[1],
-                "precision": metric["precision"],
-                "recall": metric["recall"],
-                "f1": metric["f1"],
-                "positives": metric["p"],
-                "negatives": metric["n"],
-            }
-            records.append(record)
-
-        metrics_df = pd.DataFrame.from_records(records)
-        return metrics_df
