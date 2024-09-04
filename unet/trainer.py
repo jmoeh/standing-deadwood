@@ -41,10 +41,8 @@ class DeadwoodTrainer:
             in_channels=3,
             classes=1,
         )
-
         model.to(device=self.device)
         self.model = model
-
         self.criterion = BCEDiceLoss(
             pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
                 self.device, torch.float32
@@ -103,27 +101,14 @@ class DeadwoodTrainer:
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         if self.config["use_wandb"]:
-            self.accelerator.init_trackers("standing-deadwood-unet-pro", config=self.config)
-            # self.val_table = wandb.Table(
-            #     columns=[
-            #         "fold",
-            #         "epoch",
-            #         "biome",
-            #         "resolution_bin",
-            #         "precision",
-            #         "recall",
-            #         "f1",
-            #         "positives",
-            #         "negatives",
-            #     ]
-            # )
+            self.accelerator.init_trackers("standing-deadwood-unet-pro", config=self.config, init_kwargs={"wandb":{"name":self.run_name}})
+            self.accelerator.get_tracker("wandb").define_metric("train_loss", summary="min")
+            self.accelerator.get_tracker("wandb").define_metric("val_loss", summary="min")
 
     def setup_accelerator(self):
-        model, optimizer, train_loader, scheduler = self.accelerator.prepare(
-            self.model, self.optimizer, self.train_loader, self.scheduler
+        model, optimizer, train_loader, val_loader, scheduler = self.accelerator.prepare(
+            self.model, self.optimizer, self.train_loader, self.val_loader, self.scheduler
         )
-        val_loader = self.accelerator.prepare(self.val_loader)
-        
         self.model = model
         self.optimizer = optimizer
         self.train_loader = train_loader
@@ -175,6 +160,7 @@ class DeadwoodTrainer:
                     {
                         "train_loss": train_loss,
                         "val_loss": val_loss,
+                        "metrics": metrics,
                         "epoch": epoch,
                         "fold": fold,
                     }
@@ -193,7 +179,7 @@ class DeadwoodTrainer:
             desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
             unit="img",
         )
-        
+        metrics_eval = []
         for images, masks_true, masks_weights, indexes in self.val_loader:
             images = images.to(
                 dtype=torch.float32,
@@ -213,13 +199,14 @@ class DeadwoodTrainer:
             )
             epoch_loss += loss.item()
             all_precision, all_recall, all_f1 = PrecisionRecallF1()(all_masks_true, all_masks_pred, all_masks_weights)
-            
             all_metrics = torch.cat((all_precision, all_recall, all_f1, all_indexes.unsqueeze(1).cpu()), dim=1)
-            print(all_metrics.shape)
-            
+            metrics_eval.append(all_metrics)
             pbar.update(images.shape[0])
 
-        return epoch_loss / len(self.val_loader), all_metrics
+        metrics = torch.cat(metrics_eval, dim=0)
+        print(metrics)
+        print(metrics.shape)
+        return epoch_loss / len(self.val_loader), metrics
 
     def save_checkpoint(self, fold: int, epoch: int):
         checkpoint_name = f"{self.run_path}/fold_{fold}_epoch_{epoch}"
@@ -236,6 +223,5 @@ class DeadwoodTrainer:
             self.setup_dataloader(fold=fold)
             self.setup_accelerator()
             self.train(fold=fold)
-
-        # if self.config["use_wandb"]:
-        #     self.experiment.log({"val_metrics": self.val_table})
+        
+        self.accelerator.end_training()

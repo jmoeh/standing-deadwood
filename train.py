@@ -67,8 +67,7 @@ if __name__ == "__main__":
         except json.JSONDecodeError:
             print(f"Config file {args.config} could not be decoded.")
 
-    if args.fold:
-        config["run_fold"] = args.fold
+    config["run_fold"] = args.fold
 
     trainer = DeadwoodTrainer(run_name=config["experiment_name"], config=config)
     trainer.run()
