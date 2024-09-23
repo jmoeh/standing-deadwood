@@ -32,7 +32,7 @@ class DeadwoodTrainer:
         
 
     def setup_device(self):
-        self.accelerator = Accelerator(log_with="wandb", project_dir=self.config["experiments_dir"])
+        self.accelerator = Accelerator(log_with="wandb", project_dir=self.config["experiments_dir"], gradient_accumulation_steps=self.config["gradient_accumulation"])
         self.device = self.accelerator.device
 
     def setup_model(self):
@@ -122,29 +122,33 @@ class DeadwoodTrainer:
 		        disable=not self.accelerator.is_local_main_process,
             )
             for images, masks_true, masks_weights, _ in self.train_loader:
-                images = images.to(
-                    dtype=torch.float32,
-                    memory_format=torch.channels_last,
-                )
-                masks_true = masks_true.to(dtype=torch.long).squeeze()
-                masks_weights = masks_weights.to(dtype=torch.uint8).squeeze()
+                with self.accelerator.accumulate(self.model):
+                    images = images.to(
+                        dtype=torch.float32,
+                        memory_format=torch.channels_last,
+                    )
+                    masks_true = masks_true.to(dtype=torch.long).squeeze()
+                    masks_weights = masks_weights.to(dtype=torch.uint8).squeeze()
 
-                masks_pred = self.model(images).squeeze(1)
-                loss = self.criterion(
-                    masks_pred.squeeze(1),
-                    masks_true.float(),
-                    masks_weights.squeeze(1),
-                )
-                self.optimizer.zero_grad(set_to_none=True)
-                self.accelerator.backward(loss.contiguous())
+                    masks_pred = self.model(images).squeeze(1)
+                    loss = self.criterion(
+                        masks_pred.squeeze(1),
+                        masks_true.float(),
+                        masks_weights.squeeze(1),
+                    )
+                    self.optimizer.zero_grad(set_to_none=True)
+                    self.accelerator.backward(loss.contiguous())
 
                 epoch_loss += loss.item()
                 pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
-            val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
-            metrics_df = self.get_metrics(metrics,epoch)
-            self.metrics_df = pd.concat([self.metrics_df, metrics_df])
+            full_eval = epoch + 1 % self.config["full_eval"] == 0
+            val_loss, metrics = self.evaluate(epoch=epoch, fold=fold, full_eval=full_eval)
+            
+            if full_eval:
+                metrics_df = self.get_metrics(metrics,epoch)
+                self.metrics_df = pd.concat([self.metrics_df, metrics_df])
             
             self.scheduler.step(val_loss)
             if self.config["use_wandb"]:
@@ -163,7 +167,7 @@ class DeadwoodTrainer:
                 self.save_checkpoint(fold=fold, epoch=epoch)
 
     @torch.inference_mode()
-    def evaluate(self, fold: int, epoch: int):
+    def evaluate(self, fold: int, epoch: int, full_eval: bool):
         self.model.eval()
         epoch_loss = 0
 
@@ -192,12 +196,16 @@ class DeadwoodTrainer:
                 all_masks_pred, all_masks_true.float(), all_masks_weights.squeeze(1)
             )
             epoch_loss += loss.item()
-            all_precision, all_recall, all_f1 = PrecisionRecallF1()(all_masks_true, all_masks_pred, all_masks_weights)
-            all_metrics = torch.cat((all_precision, all_recall, all_f1, all_indexes.unsqueeze(1).cpu()), dim=1)
-            metrics_eval.append(all_metrics)
+            
+            if full_eval:
+                all_precision, all_recall, all_f1 = PrecisionRecallF1()(all_masks_true, all_masks_pred, all_masks_weights)
+                all_metrics = torch.cat((all_precision, all_recall, all_f1, all_indexes.unsqueeze(1).cpu()), dim=1)
+                metrics_eval.append(all_metrics)
             pbar.update(images.shape[0])
-
-        metrics = torch.cat(metrics_eval, dim=0)
+        
+        metrics = None
+        if full_eval:
+            metrics = torch.cat(metrics_eval, dim=0)
         return epoch_loss / len(self.val_loader), metrics
 
     def get_metrics(self, metrics: torch.Tensor, epoch: int):
