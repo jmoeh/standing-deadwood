@@ -168,7 +168,6 @@ class DeadwoodDataset(Dataset):
                     index_tensor,
                 )
             except:
-                print(f"skipping image {image_path}")
                 index = (index + 1) % len(self.register_df)
 
     def __len__(self):

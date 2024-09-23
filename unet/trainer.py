@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
 from tqdm import tqdm
 
 from accelerate import Accelerator, DistributedDataParallelKwargs
+from unet.unet_model import UNet
 from unet.train_dataset import DeadwoodDataset
 from unet.unet_loss import BCEDiceLoss,PrecisionRecallF1
 import segmentation_models_pytorch as smp
@@ -21,6 +22,7 @@ class DeadwoodTrainer:
         self.config = config
         self.run_name = run_name
         self.run_path = Path(self.config["experiments_dir"]) / self.run_name
+        self.run_path.mkdir(parents=True, exist_ok=True)
         
         if self.config["run_fold"] >= 0:
             self.run_name = f"{run_name}_fold{self.config['run_fold']}"
@@ -36,12 +38,11 @@ class DeadwoodTrainer:
     def setup_model(self):
         # model with three input channels (RGB)
         model = smp.Unet(
-            encoder_name=self.config["encoder_name"],
-            encoder_weights=self.config["encoder_weights"],
+            # encoder_name=self.config["encoder_name"],
+            # encoder_weights=self.config["encoder_weights"],
             in_channels=3,
             classes=1,
         )
-        model.to(device=self.device)
         self.model = model
         self.criterion = BCEDiceLoss(
             pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
@@ -97,13 +98,9 @@ class DeadwoodTrainer:
             self.val_loader = DataLoader(val_set, sampler=val_sampler, **loader_args)
 
     def setup_experiment(self, run_name: str):
-        self.run_dir = Path(self.config["experiments_dir"]) / run_name
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-
+        self.metrics_df = pd.DataFrame()
         if self.config["use_wandb"]:
             self.accelerator.init_trackers("standing-deadwood-unet-pro", config=self.config, init_kwargs={"wandb":{"name":self.run_name}})
-            self.accelerator.get_tracker("wandb").define_metric("train_loss", summary="min")
-            self.accelerator.get_tracker("wandb").define_metric("val_loss", summary="min")
 
     def setup_accelerator(self):
         model, optimizer, train_loader, val_loader, scheduler = self.accelerator.prepare(
@@ -123,6 +120,7 @@ class DeadwoodTrainer:
                 total=len(self.train_loader) * self.config["batch_size"],
                 desc=f"Training: Epoch {epoch}/{self.config['epochs']}",
                 unit="img",
+		# disable=True
             )
             for images, masks_true, masks_weights, _ in self.train_loader:
                 images = images.to(
@@ -132,39 +130,43 @@ class DeadwoodTrainer:
                 masks_true = masks_true.to(dtype=torch.long).squeeze()
                 masks_weights = masks_weights.to(dtype=torch.uint8).squeeze()
 
-                with torch.amp.autocast(
-                    self.device.type if self.device.type != "mps" else "cpu",
-                    enabled=self.config["amp"],
-                ):
-                    masks_pred = self.model(images).squeeze(1)
-                    loss = self.criterion(
-                        masks_pred.squeeze(1),
-                        masks_true.float(),
-                        masks_weights.squeeze(1),
-                    )
-                    self.optimizer.zero_grad(set_to_none=True)
-                    self.accelerator.backward(loss)
-                    torch.nn.utils.clip_grad.clip_grad_norm_(
-                        self.model.parameters(), self.config["gradient_clipping"]
-                    )
+                masks_pred = self.model(images).squeeze(1)
+                loss = self.criterion(
+                    masks_pred.squeeze(1),
+                    masks_true.float(),
+                    masks_weights.squeeze(1),
+                )
+                self.optimizer.zero_grad(set_to_none=True)
+                self.accelerator.backward(loss)
 
-                    epoch_loss += loss.item()
-                    pbar.update(images.shape[0])
+                epoch_loss += loss.item()
+                pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
             val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
+            metrics_df = self.get_metrics(metrics,epoch)
+            self.metrics_df = pd.concat([self.metrics_df, metrics_df])
+            
+            # get highest mean f1, precision, recall from all thresholds
+            best_f1 = metrics_df.iloc[:, 18:27].mean(axis=1).max()
+            best_precision = metrics_df.iloc[:, :9].mean(axis=1).max()
+            best_recall = metrics_df.iloc[:, 9:18].mean(axis=1).max()
+            
             self.scheduler.step(val_loss)
-
             if self.config["use_wandb"]:
                 self.accelerator.log(
                     {
                         "train_loss": train_loss,
                         "val_loss": val_loss,
-                        "metrics": metrics,
                         "epoch": epoch,
                         "fold": fold,
+                        "best_f1": best_f1,
+                        "best_precision": best_precision,
+                        "best_recall": best_recall,
                     }
                 )
+            else:
+                print(f"train loss: {train_loss}")
 
             if self.config["save_checkpoint"]:
                 self.save_checkpoint(fold=fold, epoch=epoch)
@@ -178,6 +180,7 @@ class DeadwoodTrainer:
             total=len(self.val_loader) * self.config["batch_size"],
             desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
             unit="img",
+	    # disable=True
         )
         metrics_eval = []
         for images, masks_true, masks_weights, indexes in self.val_loader:
@@ -204,9 +207,30 @@ class DeadwoodTrainer:
             pbar.update(images.shape[0])
 
         metrics = torch.cat(metrics_eval, dim=0)
-        print(metrics)
-        print(metrics.shape)
         return epoch_loss / len(self.val_loader), metrics
+
+    def get_metrics(self, metrics: torch.Tensor, epoch: int):
+        metrics_np = metrics.numpy()  # if the tensor is a PyTorch tensor
+        # If it's a numpy array already, you can skip the conversion step.
+
+        # Split the array into precision, recall, F1, and index
+        precision_vals = metrics_np[:, :9]  # Precision columns for thresholds 0.1 to 0.9
+        recall_vals = metrics_np[:, 9:18]   # Recall columns for thresholds 0.1 to 0.9
+        f1_vals = metrics_np[:, 18:27]      # F1 columns for thresholds 0.1 to 0.9
+        index_vals = metrics_np[:, 27]      # Index column
+
+        # Create column names for the DataFrame
+        precision_cols = [f'precision_{t:.1f}' for t in [0.1 * i for i in range(1, 10)]]
+        recall_cols = [f'recall_{t:.1f}' for t in [0.1 * i for i in range(1, 10)]]
+        f1_cols = [f'f1_{t:.1f}' for t in [0.1 * i for i in range(1, 10)]]
+
+        # Create a DataFrame from the numpy arrays
+        metrics_df = pd.DataFrame(
+            data=np.hstack((precision_vals, recall_vals, f1_vals, index_vals.reshape(-1, 1))),
+            columns=precision_cols + recall_cols + f1_cols + ['index']
+        )
+        metrics_df['epoch'] = epoch
+        return metrics_df
 
     def save_checkpoint(self, fold: int, epoch: int):
         checkpoint_name = f"{self.run_path}/fold_{fold}_epoch_{epoch}"
@@ -225,3 +249,4 @@ class DeadwoodTrainer:
             self.train(fold=fold)
         
         self.accelerator.end_training()
+        self.metrics_df.to_csv(self.run_path / f"{self.run_name}_metrics.df", index=False)
