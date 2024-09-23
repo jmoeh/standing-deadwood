@@ -29,12 +29,12 @@ fi
 
 echo "copy tiles"
 echo $(date)
-rsync -ah --progress ~/work/tiles_sample.tar $WORKSPACE
+rsync -ah --progress ~/work/tiles_1024.tar $WORKSPACE
 echo "copy done..."
 
 echo $(date)
 echo "untar tiles"
-tar -xf $WORKSPACE/tiles_sample.tar -C $WORKSPACE
+tar -xf $WORKSPACE/tiles_1024.tar -C $WORKSPACE
 echo "untar done..."
 
 echo "configuring accelerate"
