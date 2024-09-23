@@ -167,7 +167,8 @@ class DeadwoodDataset(Dataset):
                     weight_tensor,
                     index_tensor,
                 )
-            except:
+            except Exception as e:
+                # print(e)
                 index = (index + 1) % len(self.register_df)
 
     def __len__(self):

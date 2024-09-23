@@ -32,17 +32,15 @@ class DeadwoodTrainer:
         
 
     def setup_device(self):
-        self.accelerator = Accelerator(kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)], log_with="wandb", project_dir=self.config["experiments_dir"])
+        self.accelerator = Accelerator(log_with="wandb", project_dir=self.config["experiments_dir"])
         self.device = self.accelerator.device
 
     def setup_model(self):
         # model with three input channels (RGB)
-        model = smp.Unet(
-            # encoder_name=self.config["encoder_name"],
-            # encoder_weights=self.config["encoder_weights"],
-            in_channels=3,
-            classes=1,
-        )
+        model = UNet(
+            n_channels=3,
+            n_classes=1,
+        ).to(memory_format=torch.channels_last)
         self.model = model
         self.criterion = BCEDiceLoss(
             pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
@@ -107,6 +105,7 @@ class DeadwoodTrainer:
             self.model, self.optimizer, self.train_loader, self.val_loader, self.scheduler
         )
         self.model = model
+        self.model.to(self.device)
         self.optimizer = optimizer
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -120,7 +119,7 @@ class DeadwoodTrainer:
                 total=len(self.train_loader) * self.config["batch_size"],
                 desc=f"Training: Epoch {epoch}/{self.config['epochs']}",
                 unit="img",
-		# disable=True
+		        disable=not self.accelerator.is_local_main_process,
             )
             for images, masks_true, masks_weights, _ in self.train_loader:
                 images = images.to(
@@ -137,7 +136,7 @@ class DeadwoodTrainer:
                     masks_weights.squeeze(1),
                 )
                 self.optimizer.zero_grad(set_to_none=True)
-                self.accelerator.backward(loss)
+                self.accelerator.backward(loss.contiguous())
 
                 epoch_loss += loss.item()
                 pbar.update(images.shape[0])
@@ -147,11 +146,6 @@ class DeadwoodTrainer:
             metrics_df = self.get_metrics(metrics,epoch)
             self.metrics_df = pd.concat([self.metrics_df, metrics_df])
             
-            # get highest mean f1, precision, recall from all thresholds
-            best_f1 = metrics_df.iloc[:, 18:27].mean(axis=1).max()
-            best_precision = metrics_df.iloc[:, :9].mean(axis=1).max()
-            best_recall = metrics_df.iloc[:, 9:18].mean(axis=1).max()
-            
             self.scheduler.step(val_loss)
             if self.config["use_wandb"]:
                 self.accelerator.log(
@@ -160,9 +154,6 @@ class DeadwoodTrainer:
                         "val_loss": val_loss,
                         "epoch": epoch,
                         "fold": fold,
-                        "best_f1": best_f1,
-                        "best_precision": best_precision,
-                        "best_recall": best_recall,
                     }
                 )
             else:
@@ -180,7 +171,7 @@ class DeadwoodTrainer:
             total=len(self.val_loader) * self.config["batch_size"],
             desc=f"Validation: Epoch {epoch}/{self.config['epochs']}",
             unit="img",
-	    # disable=True
+	        disable=not self.accelerator.is_local_main_process,
         )
         metrics_eval = []
         for images, masks_true, masks_weights, indexes in self.val_loader:
