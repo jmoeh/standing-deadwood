@@ -42,7 +42,7 @@ class BCEDiceLoss(nn.Module):
             self.bce_weight * weighted_bce_loss + (1 - self.bce_weight) * dice_loss
         )
         return total_loss
-    
+
 
 class PrecisionRecallF1(nn.Module):
     def __init__(self, thresholds=None, smooth=1e-8):
@@ -55,12 +55,12 @@ class PrecisionRecallF1(nn.Module):
     def forward(self, true_masks, predicted_masks, weight_masks):
         batch_size = true_masks.size(0)
         num_thresholds = len(self.thresholds)
-        
+
         # Prepare tensors to hold precision, recall, and F1 scores
         precision = torch.zeros(batch_size, num_thresholds)
         recall = torch.zeros(batch_size, num_thresholds)
         f1 = torch.zeros(batch_size, num_thresholds)
-        
+
         # Iterate over each threshold
         for i, threshold in enumerate(self.thresholds):
             # Binarize the masks based on the current threshold
@@ -80,7 +80,11 @@ class PrecisionRecallF1(nn.Module):
             # Calculate precision, recall, and F1 score
             precision[:, i] = tp / (tp + fp + self.smooth)
             recall[:, i] = tp / (tp + fn + self.smooth)
-            f1[:, i] = 2 * precision[:, i] * recall[:, i] / (precision[:, i] + recall[:, i] + self.smooth)
+            f1[:, i] = (
+                2
+                * precision[:, i]
+                * recall[:, i]
+                / (precision[:, i] + recall[:, i] + self.smooth)
+            )
 
         return precision, recall, f1
-

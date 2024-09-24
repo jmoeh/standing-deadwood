@@ -45,7 +45,7 @@ LAUNCHER="accelerate launch \
     --rdzv_conf rdzv_backend=static \
     /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/train.py \
     --fold $SLURM_ARRAY_TASK_ID \
-    --config /home/sc.uni-leipzig.de/jk947skaa/experiments/15k_100epochs_vanilla_pos_weight_12_bce_09/config.json
+    --config /home/sc.uni-leipzig.de/jk947skaa/experiments/20k_100epochs_vanilla_pos_weight_12_bce_09/config.json
 
 "
 
