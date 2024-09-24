@@ -4,8 +4,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-import wandb
 from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -138,17 +136,17 @@ class DeadwoodTrainer:
                     )
                     self.optimizer.zero_grad(set_to_none=True)
                     self.accelerator.backward(loss.contiguous())
+                    self.optimizer.step()
 
                 epoch_loss += loss.item()
                 pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
-            full_eval = epoch + 1 % self.config["full_eval"] == 0
-            val_loss, metrics = self.evaluate(epoch=epoch, fold=fold, full_eval=full_eval)
+            val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
+            self.scheduler.step(val_loss)
             
-            if full_eval:
-                metrics_df = self.get_metrics(metrics,epoch)
-                self.metrics_df = pd.concat([self.metrics_df, metrics_df])
+            metrics_df = self.get_metrics(metrics,epoch)
+            self.metrics_df = pd.concat([self.metrics_df, metrics_df])
             
             self.scheduler.step(val_loss)
             if self.config["use_wandb"]:
@@ -167,7 +165,7 @@ class DeadwoodTrainer:
                 self.save_checkpoint(fold=fold, epoch=epoch)
 
     @torch.inference_mode()
-    def evaluate(self, fold: int, epoch: int, full_eval: bool):
+    def evaluate(self, fold: int, epoch: int):
         self.model.eval()
         epoch_loss = 0
 
@@ -197,15 +195,12 @@ class DeadwoodTrainer:
             )
             epoch_loss += loss.item()
             
-            if full_eval:
-                all_precision, all_recall, all_f1 = PrecisionRecallF1()(all_masks_true, all_masks_pred, all_masks_weights)
-                all_metrics = torch.cat((all_precision, all_recall, all_f1, all_indexes.unsqueeze(1).cpu()), dim=1)
-                metrics_eval.append(all_metrics)
+            all_precision, all_recall, all_f1 = PrecisionRecallF1()(all_masks_true, all_masks_pred, all_masks_weights)
+            all_metrics = torch.cat((all_precision, all_recall, all_f1, all_indexes.unsqueeze(1).cpu()), dim=1)
+            metrics_eval.append(all_metrics)
             pbar.update(images.shape[0])
         
-        metrics = None
-        if full_eval:
-            metrics = torch.cat(metrics_eval, dim=0)
+        metrics = torch.cat(metrics_eval, dim=0)
         return epoch_loss / len(self.val_loader), metrics
 
     def get_metrics(self, metrics: torch.Tensor, epoch: int):
@@ -226,7 +221,7 @@ class DeadwoodTrainer:
         # Create a DataFrame from the numpy arrays
         metrics_df = pd.DataFrame(
             data=np.hstack((precision_vals, recall_vals, f1_vals, index_vals.reshape(-1, 1))),
-            columns=precision_cols + recall_cols + f1_cols + ['index']
+            columns=precision_cols + recall_cols + f1_cols + ['register_index']
         )
         metrics_df['epoch'] = epoch
         return metrics_df
@@ -247,5 +242,5 @@ class DeadwoodTrainer:
             self.setup_accelerator()
             self.train(fold=fold)
         
+        self.metrics_df.to_csv(self.run_path / f"{self.run_name}_metrics.csv", index=False)
         self.accelerator.end_training()
-        self.metrics_df.to_csv(self.run_path / f"{self.run_name}_metrics.df", index=False)

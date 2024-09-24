@@ -37,12 +37,12 @@ echo "untar tiles"
 tar -xf $WORKSPACE/tiles_1024.tar -C $WORKSPACE
 echo "untar done..."
 
-echo "configuring accelerate"
-python -c "from accelerate.utils import write_basic_config; write_basic_config(mixed_precision='fp16')"
-accelerate env
-
 LAUNCHER="accelerate launch \
-    --rdzv_conf rdzv_backend=c10d \
+    --multi_gpu \
+    --mixed_precision=fp16 \
+    --num_processes=8
+    --num_machines=1
+    --rdzv_conf rdzv_backend=static \
     /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/train.py \
     --fold $SLURM_ARRAY_TASK_ID \
     --config /home/sc.uni-leipzig.de/jk947skaa/experiments/15k_100epochs_vanilla_pos_weight_12_bce_09/config.json
