@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ from unet.unet_model import UNet
 from unet.train_dataset import DeadwoodDataset
 from unet.unet_loss import BCEDiceLoss, PrecisionRecallF1
 import segmentation_models_pytorch as smp
+from accelerate.utils import InitProcessGroupKwargs
 
 
 class DeadwoodTrainer:
@@ -33,6 +35,7 @@ class DeadwoodTrainer:
             log_with="wandb",
             project_dir=self.config["experiments_dir"],
             gradient_accumulation_steps=self.config["gradient_accumulation"],
+            kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(seconds=800000))],
         )
         self.device = self.accelerator.device
 
@@ -134,6 +137,7 @@ class DeadwoodTrainer:
             )
             for images, masks_true, masks_weights, _ in self.train_loader:
                 with self.accelerator.accumulate(self.model):
+                    self.optimizer.zero_grad(set_to_none=True)
                     images = images.to(
                         dtype=torch.float32,
                         memory_format=torch.channels_last,
@@ -147,7 +151,6 @@ class DeadwoodTrainer:
                         masks_true.float(),
                         masks_weights.squeeze(1),
                     )
-                    self.optimizer.zero_grad(set_to_none=True)
                     self.accelerator.backward(loss.contiguous())
                     self.optimizer.step()
 
@@ -155,22 +158,30 @@ class DeadwoodTrainer:
                 pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
-            val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
-            self.scheduler.step(val_loss)
-
-            metrics_df = self.get_metrics(metrics, epoch)
-            self.metrics_df = pd.concat([self.metrics_df, metrics_df])
-
-            self.scheduler.step(val_loss)
             if self.config["use_wandb"]:
                 self.accelerator.log(
                     {
                         "train_loss": train_loss,
-                        "val_loss": val_loss,
                         "epoch": epoch,
                         "fold": fold,
                     }
                 )
+            if (epoch + 1) % 5 == 0:
+                val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
+                self.scheduler.step(val_loss)
+
+                metrics_df = self.get_metrics(metrics, epoch)
+                self.metrics_df = pd.concat([self.metrics_df, metrics_df])
+                self.scheduler.step(val_loss)
+                if self.config["use_wandb"]:
+                    self.accelerator.log(
+                        {
+                            "val_loss": val_loss,
+                            "epoch": epoch,
+                            "fold": fold,
+                        }
+                    )
+
             else:
                 print(f"train loss: {train_loss}")
 
@@ -251,6 +262,7 @@ class DeadwoodTrainer:
     def save_checkpoint(self, fold: int, epoch: int):
         checkpoint_name = f"{self.run_path}/fold_{fold}_epoch_{epoch}"
         self.accelerator.save_state(output_dir=checkpoint_name)
+        self.accelerator.wait_for_everyone()
 
     def run(self):
         self.setup_device()

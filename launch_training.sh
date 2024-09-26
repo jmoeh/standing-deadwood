@@ -17,6 +17,7 @@ source /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/venv/bin/activate
 export NCCL_P2P_DISABLE=1
 
 WORKSPACE="/lscratch/standing-deadwood"
+EXPERIMENT="20k_100epochs_vanilla_pos_weight_12_bce_09"
 
 # create workspace dir if not exists
 if [ ! -d "$WORKSPACE" ]; then
@@ -45,11 +46,14 @@ LAUNCHER="accelerate launch \
     --rdzv_conf rdzv_backend=static \
     /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/train.py \
     --fold $SLURM_ARRAY_TASK_ID \
-    --config /home/sc.uni-leipzig.de/jk947skaa/experiments/20k_100epochs_vanilla_pos_weight_12_bce_09/config.json
+    --config /home/sc.uni-leipzig.de/jk947skaa/experiments/$EXPERIMENT/config.json
 
 "
 
 $LAUNCHER
+
+rsync -ah $WORKSPACE/$EXPERIMENT/* /home/sc.uni-leipzig.de/jk947skaa/experiments/$EXPERIMENT
+
 echo $(date)
 echo "removing data"
 rm -rf $WORKSPACE
