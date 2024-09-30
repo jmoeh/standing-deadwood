@@ -19,6 +19,7 @@ class DeadwoodDataset(Dataset):
         test_size=0.2,
         bins=np.arange(0, 0.21, 0.02),
         nodata_value=255,
+        verbose=False,
     ):
         super(DeadwoodDataset, self).__init__()
         self.register_df = register_df
@@ -160,7 +161,7 @@ class DeadwoodDataset(Dataset):
                 weight_tensor[mask_tensor == self.nodata_value] = (
                     0  # Assign weight 0 to 'nodata' areas
                 )
-                index_tensor = torch.tensor(index, dtype=torch.int64)   
+                index_tensor = torch.tensor(index, dtype=torch.int64)
                 return (
                     image_tensor,
                     mask_tensor,
@@ -168,7 +169,8 @@ class DeadwoodDataset(Dataset):
                     index_tensor,
                 )
             except Exception as e:
-                # print(e)
+                if self.verbose:
+                    print(e)
                 index = (index + 1) % len(self.register_df)
 
     def __len__(self):
