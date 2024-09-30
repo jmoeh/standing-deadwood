@@ -166,7 +166,7 @@ class DeadwoodTrainer:
                         "fold": fold,
                     }
                 )
-            if (epoch + 1) % 5 == 0:
+            if (epoch + 1) % 10 == 0:
                 val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
                 self.scheduler.step(val_loss)
 

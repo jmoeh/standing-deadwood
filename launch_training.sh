@@ -25,18 +25,18 @@ if [ ! -d "$WORKSPACE" ]; then
     mkdir -p $WORKSPACE
 else
     echo "$WORKSPACE already exists"
-    rm -rf $WORKSPACE/*
+    # rm -rf $WORKSPACE/*
 fi
 
-echo "copy tiles"
-echo $(date)
-rsync -ah --progress ~/work/tiles_1024.tar $WORKSPACE
-echo "copy done..."
+# echo "copy tiles"
+# echo $(date)
+# rsync -ah --progress ~/work/tiles_1024.tar $WORKSPACE
+# echo "copy done..."
 
-echo $(date)
-echo "untar tiles"
-tar -xf $WORKSPACE/tiles_1024.tar -C $WORKSPACE
-echo "untar done..."
+# echo $(date)
+# echo "untar tiles"
+# tar -xf $WORKSPACE/tiles_1024.tar -C $WORKSPACE
+# echo "untar done..."
 
 LAUNCHER="accelerate launch \
     --multi_gpu \
