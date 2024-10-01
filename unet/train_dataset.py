@@ -27,6 +27,7 @@ class DeadwoodDataset(Dataset):
         self.images_dir = images_dir
         self.nodata_value = nodata_value
         self.no_folds = no_folds
+        self.verbose = verbose
 
         random.seed(self.random_seed)
         np.random.seed(self.random_seed)
