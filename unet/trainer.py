@@ -11,7 +11,7 @@ from tqdm import tqdm
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from unet.unet_model import UNet
 from unet.train_dataset import DeadwoodDataset
-from unet.unet_loss import BCEDiceLoss, PrecisionRecallF1
+from unet.unet_loss import PrecisionRecallF1, TverskyFocalLoss
 import segmentation_models_pytorch as smp
 from accelerate.utils import InitProcessGroupKwargs
 
@@ -41,18 +41,31 @@ class DeadwoodTrainer:
 
     def setup_model(self):
         # model with three input channels (RGB)
-        model = UNet(
-            n_channels=3,
-            n_classes=1,
-        ).to(memory_format=torch.channels_last)
+        if self.config["encoder_name"] != "unet":
+            model = smp.Unet(
+                encoder_name=self.config["encoder_name"],
+                encoder_weights=self.config["encoder_weights"],
+                in_channels=3,
+                classes=1,
+            ).to(memory_format=torch.channels_last)
+        else:
+            model = UNet(
+                n_channels=3,
+                n_classes=1,
+            ).to(memory_format=torch.channels_last)
         self.model = model
-        self.criterion = BCEDiceLoss(
-            pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
-                self.device, torch.float32
-            ),
-            bce_weight=self.config["bce_weight"],
-        )
-
+        if self.config["loss"] == "bce":
+            self.criterion = torch.nn.BCEWithLogitsLoss(
+                pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
+                    self.device, torch.float32
+                )
+            )
+        elif self.config["loss"] == "tverskyfocal":
+            self.criterion = TverskyFocalLoss(
+                alpha=self.config["alpha"],
+                beta=self.config["beta"],
+                gamma=self.config["gamma"],
+            )
         # optimizer
         self.optimizer = torch.optim.RMSprop(
             model.parameters(),
@@ -73,6 +86,7 @@ class DeadwoodTrainer:
             random_seed=self.config["random_seed"],
             bins=self.config["bins"],
             test_size=self.config["test_size"],
+            verbose=True,
         )
 
     def setup_dataloader(self, fold: int):
@@ -166,12 +180,15 @@ class DeadwoodTrainer:
                         "fold": fold,
                     }
                 )
-            if (epoch + 1) % 5 == 0:
+            if (epoch + 1) % 2 == 0:
                 val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
                 self.scheduler.step(val_loss)
 
                 metrics_df = self.get_metrics(metrics, epoch)
-                self.metrics_df = pd.concat([self.metrics_df, metrics_df])
+                metrics_df.to_csv(
+                    f"{self.run_path}/fold_{fold}_epoch_{epoch}_metrics.csv",
+                    index=False,
+                )
                 self.scheduler.step(val_loss)
                 if self.config["use_wandb"]:
                     self.accelerator.log(
@@ -275,7 +292,4 @@ class DeadwoodTrainer:
             self.setup_accelerator()
             self.train(fold=fold)
 
-        self.metrics_df.to_csv(
-            self.run_path / f"{self.run_name}_metrics.csv", index=False
-        )
         self.accelerator.end_training()

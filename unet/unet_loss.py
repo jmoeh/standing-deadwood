@@ -44,6 +44,57 @@ class BCEDiceLoss(nn.Module):
         return total_loss
 
 
+class TverskyFocalLoss(nn.Module):
+    def __init__(self, alpha=0.5, beta=0.5, gamma=1.0, smooth=1e-6):
+        """
+        Initialize Tversky Focal Loss.
+
+        Parameters:
+        - alpha: weight for false positives (default=0.5).
+        - beta: weight for false negatives (default=0.5).
+        - gamma: focusing parameter (default=1.0).
+        - smooth: smoothing factor to avoid division by zero (default=1e-6).
+        """
+        super(TverskyFocalLoss, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.smooth = smooth
+
+    def forward(self, inputs, targets):
+        """
+        Forward pass for Tversky Focal Loss.
+
+        Parameters:
+        - inputs: predicted tensor (logits) of shape (batch, channels, height, width).
+        - targets: ground truth tensor (same shape as inputs).
+
+        Returns:
+        - Tversky Focal Loss value.
+        """
+        # Apply sigmoid to logits to get probabilities
+        inputs = torch.sigmoid(inputs)
+
+        # Flatten label and prediction tensors
+        inputs = inputs.view(-1)
+        targets = targets.view(-1)
+
+        # Calculate true positives, false positives, and false negatives
+        TP = (inputs * targets).sum()
+        FP = ((1 - targets) * inputs).sum()
+        FN = (targets * (1 - inputs)).sum()
+
+        # Calculate Tversky index
+        Tversky_index = (TP + self.smooth) / (
+            TP + self.alpha * FP + self.beta * FN + self.smooth
+        )
+
+        # Calculate Tversky Focal Loss
+        Tversky_focal_loss = (1 - Tversky_index) ** self.gamma
+
+        return Tversky_focal_loss
+
+
 class PrecisionRecallF1(nn.Module):
     def __init__(self, thresholds=None, smooth=1e-8):
         super(PrecisionRecallF1, self).__init__()

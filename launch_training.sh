@@ -5,8 +5,8 @@
 #SBATCH --nodes=1
 #SBATCH --gpus=8
 #SBATCH --time=48:00:00
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=256G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=128G
 
 # load python version and virtual environment
 module purge
@@ -17,7 +17,7 @@ source /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/venv/bin/activate
 export NCCL_P2P_DISABLE=1
 
 WORKSPACE="/lscratch/standing-deadwood"
-EXPERIMENT="30k_100epochs_vanilla_wd_pos_weight_12_bce_08"
+EXPERIMENT="testing"
 
 # create workspace dir if not exists
 if [ ! -d "$WORKSPACE" ]; then
@@ -25,18 +25,24 @@ if [ ! -d "$WORKSPACE" ]; then
     mkdir -p $WORKSPACE
 else
     echo "$WORKSPACE already exists"
-    # rm -rf $WORKSPACE/*
+    rm -rf $WORKSPACE/*
 fi
 
 echo "copy tiles"
 echo $(date)
-rsync -ah --progress ~/work/tiles_1024.tar $WORKSPACE
+rsync -ah --progress ~/work/tiles_sample.tar $WORKSPACE
 echo "copy done..."
 
 echo $(date)
 echo "untar tiles"
-tar -xf $WORKSPACE/tiles_1024.tar -C $WORKSPACE
+tar -xf $WORKSPACE/tiles_sample.tar -C $WORKSPACE
 echo "untar done..."
+
+echo "copy register"
+echo $(date)
+rsync -ah --progress ~/work/register_sample.csv $WORKSPACE
+echo "copy done..."
+
 
 LAUNCHER="accelerate launch \
     --multi_gpu \
@@ -47,7 +53,6 @@ LAUNCHER="accelerate launch \
     /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/train.py \
     --fold $SLURM_ARRAY_TASK_ID \
     --config /home/sc.uni-leipzig.de/jk947skaa/experiments/$EXPERIMENT/config.json
-
 "
 
 $LAUNCHER

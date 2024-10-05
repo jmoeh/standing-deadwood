@@ -41,6 +41,7 @@ if __name__ == "__main__":
         "images_dir": "/net/scratch/jmoehring/tiles_1024",
         "register_file": "/net/scratch/jmoehring/tiles_1024/register.csv",
         "random_seed": 10,
+        "loss": "bce",
     }
 
     parser = argparse.ArgumentParser()
