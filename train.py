@@ -20,6 +20,7 @@ if __name__ == "__main__":
         "use_wandb": False,
         "save_checkpoint": True,
         "epochs": 1,
+        "val_every": 1,
         "no_folds": 3,
         "run_fold": -1,
         "batch_size": 8,
@@ -68,7 +69,8 @@ if __name__ == "__main__":
         except json.JSONDecodeError:
             print(f"Config file {args.config} could not be decoded.")
 
-    config["run_fold"] = args.fold
+    if args.fold:
+        config["run_fold"] = args.fold
 
     trainer = DeadwoodTrainer(run_name=config["experiment_name"], config=config)
     trainer.run()

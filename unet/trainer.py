@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import timedelta
-from pathlib import Path
+from pathlib import Path  #
+import random
 
 import numpy as np
 import pandas as pd
@@ -11,7 +12,7 @@ from tqdm import tqdm
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from unet.unet_model import UNet
 from unet.train_dataset import DeadwoodDataset
-from unet.unet_loss import PrecisionRecallF1, TverskyFocalLoss
+from unet.unet_loss import PrecisionRecallF1IoU, TverskyFocalLoss, BCELoss
 import segmentation_models_pytorch as smp
 from accelerate.utils import InitProcessGroupKwargs
 
@@ -29,6 +30,11 @@ class DeadwoodTrainer:
             self.range_folds = [self.config["run_fold"]]
         else:
             self.range_folds = range(self.config["no_folds"])
+
+        random.seed(self.config["random_seed"])
+        np.random.seed(self.config["random_seed"])
+        torch.manual_seed(self.config["random_seed"])
+        torch.cuda.manual_seed_all(self.config["random_seed"])
 
     def setup_device(self):
         self.accelerator = Accelerator(
@@ -55,7 +61,7 @@ class DeadwoodTrainer:
             ).to(memory_format=torch.channels_last)
         self.model = model
         if self.config["loss"] == "bce":
-            self.criterion = torch.nn.BCEWithLogitsLoss(
+            self.criterion = BCELoss(
                 pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
                     self.device, torch.float32
                 )
@@ -180,7 +186,7 @@ class DeadwoodTrainer:
                         "fold": fold,
                     }
                 )
-            if (epoch + 1) % 2 == 0:
+            if ((epoch + 1) % self.config["val_every"] == 0) or epoch == 0:
                 val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
                 self.scheduler.step(val_loss)
 
@@ -236,11 +242,17 @@ class DeadwoodTrainer:
             )
             epoch_loss += loss.item()
 
-            all_precision, all_recall, all_f1 = PrecisionRecallF1()(
+            all_precision, all_recall, all_f1, all_iou = PrecisionRecallF1IoU()(
                 all_masks_true, all_masks_pred, all_masks_weights
             )
             all_metrics = torch.cat(
-                (all_precision, all_recall, all_f1, all_indexes.unsqueeze(1).cpu()),
+                (
+                    all_precision,
+                    all_recall,
+                    all_f1,
+                    all_iou,
+                    all_indexes.unsqueeze(1).cpu(),
+                ),
                 dim=1,
             )
             metrics_eval.append(all_metrics)
@@ -259,19 +271,31 @@ class DeadwoodTrainer:
         ]  # Precision columns for thresholds 0.1 to 0.9
         recall_vals = metrics_np[:, 9:18]  # Recall columns for thresholds 0.1 to 0.9
         f1_vals = metrics_np[:, 18:27]  # F1 columns for thresholds 0.1 to 0.9
-        index_vals = metrics_np[:, 27]  # Index column
+        iou_vals = metrics_np[:, 27:36]  # IoU columns for thresholds 0.1 to 0.9
+        index_vals = metrics_np[:, 36]  # Register index
 
         # Create column names for the DataFrame
         precision_cols = [f"precision_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
         recall_cols = [f"recall_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
         f1_cols = [f"f1_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
+        iou_cols = [f"iou_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
 
         # Create a DataFrame from the numpy arrays
         metrics_df = pd.DataFrame(
             data=np.hstack(
-                (precision_vals, recall_vals, f1_vals, index_vals.reshape(-1, 1))
+                (
+                    precision_vals,
+                    recall_vals,
+                    f1_vals,
+                    iou_vals,
+                    index_vals.reshape(-1, 1),
+                )
             ),
-            columns=precision_cols + recall_cols + f1_cols + ["register_index"],
+            columns=precision_cols
+            + recall_cols
+            + f1_cols
+            + iou_cols
+            + ["register_index"],
         )
         metrics_df["epoch"] = epoch
         return metrics_df

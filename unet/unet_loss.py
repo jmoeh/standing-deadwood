@@ -21,18 +21,27 @@ class DiceLoss(nn.Module):
         return dice_loss
 
 
+class BCELoss(nn.Module):
+    def __init__(self, pos_weight=1.0):
+        super(BCELoss, self).__init__()
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
+
+    def forward(self, logits, targets, weights):
+        bce_loss = self.bce(logits, targets)
+        weighted_bce_loss = (bce_loss * weights).mean()
+        return weighted_bce_loss
+
+
 class BCEDiceLoss(nn.Module):
     def __init__(self, pos_weight=1.0, bce_weight=0.5, smooth=1e-6):
         super(BCEDiceLoss, self).__init__()
-        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
+        self.bce = BCELoss(pos_weight=pos_weight)
         self.dice = DiceLoss(smooth=smooth)
         self.bce_weight = bce_weight
 
     def forward(self, logits, targets, weights):
-        # Apply the BCEWithLogitsLoss
-        bce_loss = self.bce(logits, targets)
-        # Multiply the loss by the weights and reduce
-        weighted_bce_loss = (bce_loss * weights).mean()
+        # Calculate the weighted BCE loss
+        weighted_bce_loss = self.bce(logits, targets, weights)
 
         # Calculate the Dice loss with weights
         dice_loss = self.dice(logits, targets, weights)
@@ -47,7 +56,7 @@ class BCEDiceLoss(nn.Module):
 class TverskyFocalLoss(nn.Module):
     def __init__(self, alpha=0.5, beta=0.5, gamma=1.0, smooth=1e-6):
         """
-        Initialize Tversky Focal Loss.
+        Initialize Tversky Focal Loss with weights.
 
         Parameters:
         - alpha: weight for false positives (default=0.5).
@@ -61,43 +70,32 @@ class TverskyFocalLoss(nn.Module):
         self.gamma = gamma
         self.smooth = smooth
 
-    def forward(self, inputs, targets):
-        """
-        Forward pass for Tversky Focal Loss.
-
-        Parameters:
-        - inputs: predicted tensor (logits) of shape (batch, channels, height, width).
-        - targets: ground truth tensor (same shape as inputs).
-
-        Returns:
-        - Tversky Focal Loss value.
-        """
+    def forward(self, inputs, targets, weights):
         # Apply sigmoid to logits to get probabilities
         inputs = torch.sigmoid(inputs)
-
-        # Flatten label and prediction tensors
+        # Flatten label, prediction, and weights tensors
         inputs = inputs.view(-1)
         targets = targets.view(-1)
-
+        weights = weights.view(-1)
+        # Apply weights to the inputs and targets
+        weighted_inputs = inputs * weights
+        weighted_targets = targets * weights
         # Calculate true positives, false positives, and false negatives
-        TP = (inputs * targets).sum()
-        FP = ((1 - targets) * inputs).sum()
-        FN = (targets * (1 - inputs)).sum()
-
-        # Calculate Tversky index
+        TP = (weighted_inputs * weighted_targets).sum()
+        FP = ((1 - weighted_targets) * weighted_inputs).sum()
+        FN = (weighted_targets * (1 - weighted_inputs)).sum()
+        # Calculate Tversky index with weights
         Tversky_index = (TP + self.smooth) / (
             TP + self.alpha * FP + self.beta * FN + self.smooth
         )
-
         # Calculate Tversky Focal Loss
         Tversky_focal_loss = (1 - Tversky_index) ** self.gamma
-
         return Tversky_focal_loss
 
 
-class PrecisionRecallF1(nn.Module):
+class PrecisionRecallF1IoU(nn.Module):
     def __init__(self, thresholds=None, smooth=1e-8):
-        super(PrecisionRecallF1, self).__init__()
+        super(PrecisionRecallF1IoU, self).__init__()
         if thresholds is None:
             thresholds = torch.arange(0.1, 1.0, 0.1)
         self.thresholds = thresholds  # List of thresholds to evaluate
@@ -111,6 +109,7 @@ class PrecisionRecallF1(nn.Module):
         precision = torch.zeros(batch_size, num_thresholds)
         recall = torch.zeros(batch_size, num_thresholds)
         f1 = torch.zeros(batch_size, num_thresholds)
+        iou = torch.zeros(batch_size, num_thresholds)
 
         # Iterate over each threshold
         for i, threshold in enumerate(self.thresholds):
@@ -137,5 +136,6 @@ class PrecisionRecallF1(nn.Module):
                 * recall[:, i]
                 / (precision[:, i] + recall[:, i] + self.smooth)
             )
+            iou[:, i] = tp / (tp + fp + fn + self.smooth)
 
-        return precision, recall, f1
+        return precision, recall, f1, iou
