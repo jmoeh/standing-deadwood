@@ -1,10 +1,11 @@
 import random
 
+import pandas as pd
 import numpy as np
 import torch
 from PIL import Image
 from rasterio import windows
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import train_test_split, KFold
 from torch.utils.data import Dataset, Subset
 from torchvision.transforms import transforms
 
@@ -72,13 +73,10 @@ class DeadwoodDataset(Dataset):
             self.val_indices.append([])
             return
         elif self.no_folds > 1:
-            kfold = StratifiedKFold(
+            kfold = KFold(
                 n_splits=self.no_folds, random_state=self.random_seed, shuffle=True
             )
-            self.folds = kfold.split(
-                self.base_train_val_register,
-                self.base_train_val_register["biome"].astype(str),
-            )
+            self.folds = kfold.split(self.base_train_val_register)
 
             for train_index, val_index in self.folds:
                 train_files = self.base_file_register.iloc[train_index][
@@ -111,15 +109,22 @@ class DeadwoodDataset(Dataset):
             self, self.val_indices[fold]
         )
 
-    def get_train_sample_weights(self, fold, balancing_factor=0.5):
+    def get_train_sample_weights(self, fold, balancing_factor=1):
         train_register = self.register_df.iloc[self.train_indices[fold]]
-        value_counts = train_register["resolution_bin"].value_counts()
-
-        # apply balancing factor to the counts before inverting to get weights
-        sqrt_counts = value_counts.apply(lambda x: x**balancing_factor)
-        weights = 1 / sqrt_counts
-
-        return torch.from_numpy(train_register["resolution_bin"].map(weights).values)
+        contingency_matrix = pd.crosstab(
+            train_register["resolution_bin"], train_register["biome"]
+        )
+        proportions = contingency_matrix / contingency_matrix.sum().sum()
+        weights = (1 / proportions.replace(0, np.nan)) ** balancing_factor
+        weights = weights.fillna(0)
+        normalized_weights = weights / weights.sum().sum()
+        weight_lookup = normalized_weights.stack().to_dict()
+        sample_weights = train_register.apply(
+            lambda row: weight_lookup.get((row["resolution_bin"], row["biome"]), 0),
+            axis=1,
+        )
+        sample_weights_tensor = torch.tensor(sample_weights.values, dtype=torch.float32)
+        return sample_weights_tensor
 
     def __getitem__(self, index):
         while True:

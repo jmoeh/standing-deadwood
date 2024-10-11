@@ -12,7 +12,7 @@ from tqdm import tqdm
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from unet.unet_model import UNet
 from unet.train_dataset import DeadwoodDataset
-from unet.unet_loss import PrecisionRecallF1IoU, TverskyFocalLoss, BCELoss
+from unet.unet_loss import PrecisionRecallF1IoU, TverskyFocalLoss, BCELoss, DiceLoss
 import segmentation_models_pytorch as smp
 from accelerate.utils import InitProcessGroupKwargs
 
@@ -72,6 +72,8 @@ class DeadwoodTrainer:
                 beta=self.config["beta"],
                 gamma=self.config["gamma"],
             )
+        elif self.config["loss"] == "dice":
+            self.criterion = TverskyFocalLoss(alpha=0.5, beta=0.5, gamma=1)
         # optimizer
         self.optimizer = torch.optim.RMSprop(
             model.parameters(),
@@ -102,7 +104,7 @@ class DeadwoodTrainer:
                 fold=fold, balancing_factor=self.config["balancing_factor"]
             ).tolist(),  # Convert tensor to sequence of floats
             self.config["epoch_train_samples"],
-            replacement=False,
+            replacement=True,
         )
         loader_args = {
             "batch_size": self.config["batch_size"],
@@ -115,7 +117,7 @@ class DeadwoodTrainer:
 
         if self.config["epoch_val_samples"] > 0:
             val_sampler = RandomSampler(
-                val_set, replacement=False, num_samples=self.config["epoch_val_samples"]
+                val_set, replacement=True, num_samples=self.config["epoch_val_samples"]
             )
             self.val_loader = DataLoader(val_set, sampler=val_sampler, **loader_args)
 
