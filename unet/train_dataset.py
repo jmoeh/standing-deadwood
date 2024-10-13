@@ -46,9 +46,7 @@ class DeadwoodDataset(Dataset):
                 self.base_file_register,
                 test_size=test_size,
                 random_state=self.random_seed,
-                stratify=self.base_file_register[["biome"]],
             )
-
             test_files = self.base_test_register["base_file_name"]
             self.test_indices = self.register_df[
                 self.register_df["base_file_name"].isin(test_files)
