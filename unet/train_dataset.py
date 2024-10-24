@@ -101,8 +101,6 @@ class DeadwoodDataset(Dataset):
         return Subset(self, self.test_indices)
 
     def get_train_val_fold(self, fold):
-        if self.no_folds == 1:
-            raise ValueError("fold index out of range")
         return Subset(self, self.train_indices[fold]), Subset(
             self, self.val_indices[fold]
         )

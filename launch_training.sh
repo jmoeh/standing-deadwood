@@ -17,7 +17,7 @@ source /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/venv/bin/activate
 export NCCL_P2P_DISABLE=1
 
 WORKSPACE="/lscratch/standing-deadwood"
-EXPERIMENT="testing"
+EXPERIMENT="nocv_50k_60e_vanilla_tversky_a03b07g2"
 
 # create workspace dir if not exists
 if [ ! -d "$WORKSPACE" ]; then
@@ -30,18 +30,18 @@ fi
 
 echo "copy tiles"
 echo $(date)
-rsync -ah --progress ~/work/tiles_sample.tar $WORKSPACE
+rsync -ah --progress ~/work/tiles.tar $WORKSPACE
 echo "copy done..."
 
 echo $(date)
 echo "untar tiles"
-tar -xf $WORKSPACE/tiles_sample.tar -C $WORKSPACE
+tar -xf $WORKSPACE/tiles.tar -C $WORKSPACE
 echo "untar done..."
 
-echo "copy register"
-echo $(date)
-rsync -ah --progress ~/work/register_sample.csv $WORKSPACE
-echo "copy done..."
+# echo "copy register"
+# echo $(date)
+# rsync -ah --progress ~/work/register_sample.csv $WORKSPACE
+# echo "copy done..."
 
 
 LAUNCHER="accelerate launch \

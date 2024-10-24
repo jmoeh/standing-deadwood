@@ -188,7 +188,9 @@ class DeadwoodTrainer:
                         "fold": fold,
                     }
                 )
-            if ((epoch + 1) % self.config["val_every"] == 0) or epoch == 0:
+            if (
+                ((epoch + 1) % self.config["val_every"] == 0) or epoch == 0
+            ) and self.config["no_folds"] > 1:
                 val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
                 self.scheduler.step(val_loss)
 
