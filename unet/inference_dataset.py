@@ -7,7 +7,7 @@ from unet.train_dataset import get_windows
 
 
 class DeadwoodInferenceDataset(Dataset):
-    def __init__(self, image_path, tile_size=512, padding=56):
+    def __init__(self, image_path, tile_size=1024, padding=256):
         super(DeadwoodInferenceDataset, self).__init__()
         self.image_path = image_path
         self.tile_size = tile_size

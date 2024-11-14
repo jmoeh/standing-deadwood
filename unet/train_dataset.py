@@ -21,6 +21,7 @@ class DeadwoodDataset(Dataset):
         bins=np.arange(0, 0.21, 0.02),
         nodata_value=255,
         verbose=False,
+        register_indexes=None,
     ):
         super(DeadwoodDataset, self).__init__()
         self.register_df = register_df
@@ -29,6 +30,7 @@ class DeadwoodDataset(Dataset):
         self.nodata_value = nodata_value
         self.no_folds = no_folds
         self.verbose = verbose
+        self.indexes = register_indexes
 
         random.seed(self.random_seed)
         np.random.seed(self.random_seed)
@@ -124,6 +126,9 @@ class DeadwoodDataset(Dataset):
 
     def __getitem__(self, index):
         while True:
+            if self.indexes is not None and index not in self.indexes:
+                index = (index + 1) % len(self.register_df)
+                continue
             image_path = (
                 f'{self.images_dir}{self.register_df.iloc[index]["global_file_path"]}'
             )
