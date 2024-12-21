@@ -108,19 +108,35 @@ class DeadwoodDataset(Dataset):
         )
 
     def get_train_sample_weights(self, fold, balancing_factor=1):
+        # Subset the training data for the current fold
         train_register = self.register_df.iloc[self.train_indices[fold]]
-        contingency_matrix = pd.crosstab(
-            train_register["resolution_bin"], train_register["biome"]
+        # Create a 3D contingency table using grouping and size
+        contingency_matrix = (
+            train_register.groupby(["resolution_bin", "biome", "mask_filled"])
+            .size()
+            .unstack(
+                fill_value=0
+            )  # Ensure the matrix is dense and fill missing values with 0
         )
-        proportions = contingency_matrix / contingency_matrix.sum().sum()
+        # Calculate proportions over the total sum
+        total_sum = contingency_matrix.sum().sum()
+        proportions = contingency_matrix / total_sum
+        # Compute weights: Inverse of proportions raised to the balancing factor
         weights = (1 / proportions.replace(0, np.nan)) ** balancing_factor
-        weights = weights.fillna(0)
+        weights = weights.fillna(0)  # Replace NaN (from division by zero) with 0
+        # Normalize weights
         normalized_weights = weights / weights.sum().sum()
+        # Convert the normalized weights into a lookup dictionary
         weight_lookup = normalized_weights.stack().to_dict()
+        # Map weights to the training data based on (resolution_bin, biome, mask_filled)
         sample_weights = train_register.apply(
-            lambda row: weight_lookup.get((row["resolution_bin"], row["biome"]), 0),
+            lambda row: weight_lookup.get(
+                (row["resolution_bin"], row["biome"], row["mask_filled"]),
+                0,  # Default weight if key not found
+            ),
             axis=1,
         )
+        # Convert sample weights into a tensor
         sample_weights_tensor = torch.tensor(sample_weights.values, dtype=torch.float32)
         return sample_weights_tensor
 
