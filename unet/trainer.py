@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
 from tqdm import tqdm
 
 from accelerate import Accelerator, DistributedDataParallelKwargs
+from unet.cappedsampler import CappedSampler
 from unet.unet_model import UNet
 from unet.train_dataset import DeadwoodDataset
 from unet.unet_loss import PrecisionRecallF1IoU, TverskyFocalLoss, BCELoss, DiceLoss
@@ -98,21 +99,23 @@ class DeadwoodTrainer:
         )
 
     def setup_dataloader(self, fold: int):
-        train_set, val_set = self.dataset.get_train_val_fold(fold)
-        train_sampler = WeightedRandomSampler(
-            self.dataset.get_train_sample_weights(
-                fold=fold, balancing_factor=self.config["balancing_factor"]
-            ).tolist(),  # Convert tensor to sequence of floats
-            self.config["epoch_train_samples"],
-            replacement=True,
-        )
+        _, val_set = self.dataset.get_train_val_fold(fold)
+        # train_sampler = WeightedRandomSampler(
+        #     self.dataset.get_train_sample_weights(
+        #         fold=fold, balancing_factor=self.config["balancing_factor"]
+        #     ).tolist(),  # Convert tensor to sequence of floats
+        #     self.config["epoch_train_samples"],
+        #     replacement=True,
+        # )
+        train_sampler = CappedSampler(dataset=self.dataset, fold=fold)
+
         loader_args = {
             "batch_size": self.config["batch_size"],
             "num_workers": self.config["num_workers"],
             "pin_memory": True,
             "shuffle": False,
         }
-        self.train_loader = DataLoader(train_set, sampler=train_sampler, **loader_args)
+        self.train_loader = DataLoader(self.dataset, sampler=train_sampler, **loader_args)
         self.val_loader = DataLoader(val_set, **loader_args)
 
         if self.config["epoch_val_samples"] > 0:

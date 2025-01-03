@@ -7,6 +7,7 @@ class CappedSampler(Sampler):
     def __init__(
         self,
         dataset,
+        fold,
         max_samples_per_ortho=50,
         max_samples_per_3D_class=100,
     ):
@@ -14,22 +15,31 @@ class CappedSampler(Sampler):
         self.dataset = dataset
         self.max_samples_per_ortho = max_samples_per_ortho
         self.max_samples_per_3D_class = max_samples_per_3D_class
-        self.resample_columns = ["resolution_bin", "biome", "mask_filled"]
+        self.resample_columns = [
+            "resolution_bin", "biome_group", "mask_filled"
+        ]
+
+        # create subset of dataset based on fold
+        self.register_subset = dataset.register_df.copy()
+        self.register_subset = self.register_subset.iloc[
+            dataset.train_indices[fold]]
 
         self.indices = None
 
         self.rng = default_rng()
 
+        self.select_indices()
+
     def select_indices(self):
 
-        temp_df = self.dataset.register_df.copy()
+        temp_df = self.register_subset.copy()
 
         # remember orignal indices
         temp_df["orig_index"] = temp_df.index
 
         # for each orthophoto and classes combination select at most 50 pixels
         temp_df = temp_df.groupby(
-            self.resample_columns + ["filename"], observed=False).apply(
+            self.resample_columns + ["base_file_name"], observed=False).apply(
                 lambda sdf: sdf.sample(frac=1, random_state=self.rng).head(
                     self.max_samples_per_ortho)).reset_index(drop=True)
 
@@ -44,9 +54,10 @@ class CappedSampler(Sampler):
         # print distribution nicely
         print("CappedSampler: ")
         print(
-            temp_df.groupby(
-                self.resample_columns).size().to_frame().reset_index().pivot(
-                    index="deadwood_bin", columns="biome"))
+            temp_df.groupby([
+                "resolution_bin", "biome_group"
+            ]).size().to_frame().reset_index().pivot(index="resolution_bin",
+                                                     columns="biome_group"))
 
         # inplace
         shuffle(self.indices)

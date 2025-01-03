@@ -38,11 +38,13 @@ if __name__ == "__main__":
         "lr_patience": 5,
         "num_workers": 32,
         "gradient_clipping": 1.0,
-        "experiments_dir": "/net/home/jmoehring/experiments",
+        "experiments_dir": "/net/home/cmosig/segmentation_experiments",
         "images_dir": "/net/scratch/jmoehring/tiles_1024",
-        "register_file": "/net/scratch/jmoehring/tiles_1024/register.csv",
+        "register_file": "/net/scratch/jmoehring/tiles/register_new.csv",
         "random_seed": 10,
         "loss": "bce",
+        "gradient_accumulation": 1,
+        "encoder_name":"unet",
     }
 
     parser = argparse.ArgumentParser()
