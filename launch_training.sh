@@ -17,7 +17,7 @@ source /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/venv/bin/activate
 export NCCL_P2P_DISABLE=1
 
 WORKSPACE="/lscratch/standing-deadwood"
-EXPERIMENT="nocv_50k_60e_vanilla_tversky_a03b07g2"
+EXPERIMENT="3d_11k_200e_vanilla_tversky_a01b09g2"
 
 # create workspace dir if not exists
 if [ ! -d "$WORKSPACE" ]; then
@@ -35,13 +35,13 @@ echo "copy done..."
 
 echo $(date)
 echo "untar tiles"
-tar -xf $WORKSPACE/tiles.tar -C $WORKSPACE
+tar --touch -xf $WORKSPACE/tiles.tar -C $WORKSPACE
 echo "untar done..."
 
-# echo "copy register"
-# echo $(date)
-# rsync -ah --progress ~/work/register_sample.csv $WORKSPACE
-# echo "copy done..."
+echo "copy register"
+echo $(date)
+rsync -ah --progress ~/work/register_new.csv $WORKSPACE/tiles
+echo "copy done..."
 
 
 LAUNCHER="accelerate launch \
@@ -52,12 +52,12 @@ LAUNCHER="accelerate launch \
     --rdzv_conf rdzv_backend=static \
     /home/sc.uni-leipzig.de/jk947skaa/standing-deadwood/train.py \
     --fold $SLURM_ARRAY_TASK_ID \
-    --config /home/sc.uni-leipzig.de/jk947skaa/experiments/$EXPERIMENT/config.json
+    --config /home/sc.uni-leipzig.de/jm36daxo/work/experiments/$EXPERIMENT/config.json
 "
 
 $LAUNCHER
 
-rsync -ah $WORKSPACE/$EXPERIMENT/* /home/sc.uni-leipzig.de/jk947skaa/experiments/$EXPERIMENT
+rsync -ah $WORKSPACE/$EXPERIMENT/* ~/work/experiments/$EXPERIMENT
 
 echo $(date)
 echo "removing data"

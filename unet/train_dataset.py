@@ -39,7 +39,7 @@ class DeadwoodDataset(Dataset):
         # but stratified by biome and resolution_bin
         self.base_file_register = (
             register_df.groupby("base_file_name")
-            .agg({"biome": "first", "resolution_bin": "min"})
+            .agg({"biome_group": "first", "resolution_bin": "min"})
             .reset_index()
         )
 
@@ -112,7 +112,7 @@ class DeadwoodDataset(Dataset):
         train_register = self.register_df.iloc[self.train_indices[fold]]
         # Create a 3D contingency table using grouping and size
         contingency_matrix = (
-            train_register.groupby(["resolution_bin", "biome", "mask_filled"])
+            train_register.groupby(["resolution_bin", "biome_group", "mask_filled"])
             .size()
             .unstack(
                 fill_value=0
@@ -131,7 +131,7 @@ class DeadwoodDataset(Dataset):
         # Map weights to the training data based on (resolution_bin, biome, mask_filled)
         sample_weights = train_register.apply(
             lambda row: weight_lookup.get(
-                (row["resolution_bin"], row["biome"], row["mask_filled"]),
+                (row["resolution_bin"], row["biome_group"], row["mask_filled"]),
                 0,  # Default weight if key not found
             ),
             axis=1,
