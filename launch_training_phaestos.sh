@@ -4,7 +4,7 @@ export NCCL_P2P_DISABLE=1
 
 LAUNCHER="accelerate launch \
     --multi_gpu \
-    --mixed_precision=fp16 \
+    --mixed_precision=bf16 \
     --num_processes=2
     --num_machines=1
     --rdzv_conf rdzv_backend=static \
