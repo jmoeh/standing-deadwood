@@ -30,6 +30,9 @@ class CappedSampler(Sampler):
 
         self.select_indices()
 
+    def __len__(self):
+        return len(self.indices)
+
     def select_indices(self):
 
         temp_df = self.register_subset.copy()
