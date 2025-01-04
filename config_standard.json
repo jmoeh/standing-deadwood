@@ -3,7 +3,7 @@
     "use_wandb": "true",
     "save_checkpoint": "true",
     "epochs": 200,
-    "val_every": 5,
+    "val_every": 15,
     "no_folds": 3, 
     "batch_size": 12,
     "gradient_accumulation":1,
