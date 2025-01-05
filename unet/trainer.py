@@ -197,13 +197,13 @@ class DeadwoodTrainer:
             ) and self.config["no_folds"] > 1:
                 val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
                 self.scheduler.step(val_loss)
+                print("New learning rate:", self.scheduler.get_last_lr())
 
                 metrics_df = self.get_metrics(metrics, epoch)
                 metrics_df.to_csv(
                     f"{self.run_path}/fold_{fold}_epoch_{epoch}_metrics.csv",
                     index=False,
                 )
-                self.scheduler.step(val_loss)
                 if self.config["use_wandb"]:
                     self.accelerator.log(
                         {
