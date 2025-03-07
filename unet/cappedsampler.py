@@ -10,11 +10,13 @@ class CappedSampler(Sampler):
         fold,
         max_samples_per_ortho=50,
         max_samples_per_3D_class=100,
+        oversample=True,
     ):
 
         self.dataset = dataset
         self.max_samples_per_ortho = max_samples_per_ortho
         self.max_samples_per_3D_class = max_samples_per_3D_class
+        self.oversample = oversample
         self.resample_columns = [
             "resolution_bin", "biome_group", "mask_filled"
         ]
@@ -46,10 +48,22 @@ class CappedSampler(Sampler):
                 lambda sdf: sdf.sample(frac=1, random_state=self.rng).head(
                     self.max_samples_per_ortho)).reset_index(drop=True)
 
-        # for each biome - deadwood_bin combination select at most 100 pixels
-        temp_df = temp_df.groupby(self.resample_columns, observed=False).apply(
-            lambda sdf: sdf.sample(frac=1, random_state=self.rng).head(
-                self.max_samples_per_3D_class)).reset_index(drop=True)
+        if self.oversample:
+            # for each biome - deadwood_bin combination select exactly 100 pixels
+            temp_df = temp_df.groupby(
+                self.resample_columns, observed=False).apply(
+                    lambda sdf: sdf.sample(n=self.max_samples_per_3D_class,
+                                           replace=True,
+                                           random_state=self.rng)).reset_index(
+                                               drop=True)
+
+        else:
+
+            # for each biome - deadwood_bin combination select at most 100 pixels
+            temp_df = temp_df.groupby(
+                self.resample_columns, observed=False).apply(
+                    lambda sdf: sdf.sample(frac=1, random_state=self.rng).head(
+                        self.max_samples_per_3D_class)).reset_index(drop=True)
 
         # extract indices
         self.indices = temp_df["orig_index"].values

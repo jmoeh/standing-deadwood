@@ -1,15 +1,14 @@
-from collections import defaultdict
 from datetime import timedelta
-from pathlib import Path  #
+from pathlib import Path
 import random
 
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, RandomSampler, WeightedRandomSampler
+from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 
-from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate import Accelerator
 from unet.cappedsampler import CappedSampler
 from unet.unet_model import UNet
 from unet.train_dataset import DeadwoodDataset
@@ -42,9 +41,20 @@ class DeadwoodTrainer:
             log_with="wandb",
             project_dir=self.config["experiments_dir"],
             gradient_accumulation_steps=self.config["gradient_accumulation"],
-            kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(seconds=800000))],
+            kwargs_handlers=[
+                InitProcessGroupKwargs(timeout=timedelta(seconds=800000))
+            ],
         )
         self.device = self.accelerator.device
+
+    def lr_lambda(self, epoch):
+        if epoch < self.config["warmup_epochs"]:
+            # Return a multiplier that gradually increases from warmup_start_lr/learning_rate to 1
+            return (
+                (self.config["learning_rate"] - self.config["warmup_start_lr"])
+                * (epoch / self.config["warmup_epochs"]) +
+                self.config["warmup_start_lr"]) / self.config["learning_rate"]
+        return 1.0  # After warmup, maintain the base learning rate
 
     def setup_model(self):
         # model with three input channels (RGB)
@@ -63,11 +73,8 @@ class DeadwoodTrainer:
         self.model = torch.compile(model)
 
         if self.config["loss"] == "bce":
-            self.criterion = BCELoss(
-                pos_weight=torch.Tensor([self.config["pos_weight"]]).to(
-                    self.device, torch.float32
-                )
-            )
+            self.criterion = BCELoss(pos_weight=torch.Tensor(
+                [self.config["pos_weight"]]).to(self.device, torch.float32))
         elif self.config["loss"] == "tverskyfocal":
             self.criterion = TverskyFocalLoss(
                 alpha=self.config["alpha"],
@@ -76,16 +83,15 @@ class DeadwoodTrainer:
             )
         elif self.config["loss"] == "dice":
             self.criterion = TverskyFocalLoss(alpha=0.5, beta=0.5, gamma=1)
-        # optimizer
-        self.optimizer = torch.optim.RMSprop(
+
+        self.optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=self.config["learning_rate"],
             weight_decay=self.config["weight_decay"],
-            momentum=self.config["momentum"],
         )
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, "min", patience=self.config["lr_patience"]
-        )
+
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.optimizer, lr_lambda=self.lr_lambda)
 
     def setup_dataset(self):
         register_df = pd.read_csv(self.config["register_file"])
@@ -101,13 +107,6 @@ class DeadwoodTrainer:
 
     def setup_dataloader(self, fold: int):
         _, val_set = self.dataset.get_train_val_fold(fold)
-        # train_sampler = WeightedRandomSampler(
-        #     self.dataset.get_train_sample_weights(
-        #         fold=fold, balancing_factor=self.config["balancing_factor"]
-        #     ).tolist(),  # Convert tensor to sequence of floats
-        #     self.config["epoch_train_samples"],
-        #     replacement=True,
-        # )
         train_sampler = CappedSampler(dataset=self.dataset, fold=fold)
 
         loader_args = {
@@ -116,14 +115,19 @@ class DeadwoodTrainer:
             "pin_memory": True,
             "shuffle": False,
         }
-        self.train_loader = DataLoader(self.dataset, sampler=train_sampler, **loader_args)
+        self.train_loader = DataLoader(self.dataset,
+                                       sampler=train_sampler,
+                                       **loader_args)
         self.val_loader = DataLoader(val_set, **loader_args)
 
         if self.config["epoch_val_samples"] > 0:
             val_sampler = RandomSampler(
-                val_set, replacement=True, num_samples=self.config["epoch_val_samples"]
-            )
-            self.val_loader = DataLoader(val_set, sampler=val_sampler, **loader_args)
+                val_set,
+                replacement=True,
+                num_samples=self.config["epoch_val_samples"])
+            self.val_loader = DataLoader(val_set,
+                                         sampler=val_sampler,
+                                         **loader_args)
 
     def setup_experiment(self, run_name: str):
         self.metrics_df = pd.DataFrame()
@@ -131,7 +135,9 @@ class DeadwoodTrainer:
             self.accelerator.init_trackers(
                 "standing-deadwood-unet-pro",
                 config=self.config,
-                init_kwargs={"wandb": {"name": self.run_name}},
+                init_kwargs={"wandb": {
+                    "name": self.run_name
+                }},
             )
 
     def setup_accelerator(self):
@@ -142,8 +148,7 @@ class DeadwoodTrainer:
                 self.train_loader,
                 self.val_loader,
                 self.scheduler,
-            )
-        )
+            ))
         self.model = model
         self.model.to(self.device)
         self.optimizer = optimizer
@@ -169,7 +174,8 @@ class DeadwoodTrainer:
                         memory_format=torch.channels_last,
                     )
                     masks_true = masks_true.to(dtype=torch.long).squeeze()
-                    masks_weights = masks_weights.to(dtype=torch.uint8).squeeze()
+                    masks_weights = masks_weights.to(
+                        dtype=torch.uint8).squeeze()
 
                     masks_pred = self.model(images).squeeze(1)
                     loss = self.criterion(
@@ -184,20 +190,16 @@ class DeadwoodTrainer:
                 pbar.update(images.shape[0])
 
             train_loss = epoch_loss / len(self.train_loader)
+
             if self.config["use_wandb"]:
-                self.accelerator.log(
-                    {
-                        "train_loss": train_loss,
-                        "epoch": epoch,
-                        "fold": fold,
-                    }
-                )
-            if (
-                ((epoch + 1) % self.config["val_every"] == 0) or epoch == 0
-            ) and self.config["no_folds"] > 1:
+                self.accelerator.log({
+                    "train_loss": train_loss,
+                    "epoch": epoch,
+                    "fold": fold,
+                })
+            if (((epoch + 1) % self.config["val_every"] == 0)
+                    or epoch == 0) and self.config["no_folds"] > 1:
                 val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
-                self.scheduler.step(val_loss)
-                print("New learning rate:", self.scheduler.get_last_lr())
 
                 metrics_df = self.get_metrics(metrics, epoch)
                 metrics_df.to_csv(
@@ -205,16 +207,17 @@ class DeadwoodTrainer:
                     index=False,
                 )
                 if self.config["use_wandb"]:
-                    self.accelerator.log(
-                        {
-                            "val_loss": val_loss,
-                            "epoch": epoch,
-                            "fold": fold,
-                        }
-                    )
+                    self.accelerator.log({
+                        "val_loss": val_loss,
+                        "epoch": epoch,
+                        "fold": fold,
+                    })
 
             else:
                 print(f"train loss: {train_loss}")
+
+            self.scheduler.step(epoch)
+            print("New learning rate:", self.scheduler.get_last_lr())
 
             if self.config["save_checkpoint"]:
                 self.save_checkpoint(fold=fold, epoch=epoch)
@@ -245,14 +248,12 @@ class DeadwoodTrainer:
             all_masks_weights = self.accelerator.gather(masks_weights)
             all_indexes = self.accelerator.gather(indexes)
 
-            loss = self.criterion(
-                all_masks_pred, all_masks_true.float(), all_masks_weights.squeeze(1)
-            )
+            loss = self.criterion(all_masks_pred, all_masks_true.float(),
+                                  all_masks_weights.squeeze(1))
             epoch_loss += loss.item()
 
-            all_precision, all_recall, all_f1, all_iou = PrecisionRecallF1IoU()(
-                all_masks_true, all_masks_pred, all_masks_weights
-            )
+            all_precision, all_recall, all_f1, all_iou = PrecisionRecallF1IoU(
+            )(all_masks_true, all_masks_pred, all_masks_weights)
             all_metrics = torch.cat(
                 (
                     all_precision,
@@ -274,36 +275,36 @@ class DeadwoodTrainer:
         # If it's a numpy array already, you can skip the conversion step.
 
         # Split the array into precision, recall, F1, and index
-        precision_vals = metrics_np[
-            :, :9
-        ]  # Precision columns for thresholds 0.1 to 0.9
-        recall_vals = metrics_np[:, 9:18]  # Recall columns for thresholds 0.1 to 0.9
+        precision_vals = metrics_np[:, :
+                                    9]  # Precision columns for thresholds 0.1 to 0.9
+        recall_vals = metrics_np[:, 9:
+                                 18]  # Recall columns for thresholds 0.1 to 0.9
         f1_vals = metrics_np[:, 18:27]  # F1 columns for thresholds 0.1 to 0.9
-        iou_vals = metrics_np[:, 27:36]  # IoU columns for thresholds 0.1 to 0.9
+        iou_vals = metrics_np[:,
+                              27:36]  # IoU columns for thresholds 0.1 to 0.9
         index_vals = metrics_np[:, 36]  # Register index
 
         # Create column names for the DataFrame
-        precision_cols = [f"precision_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
-        recall_cols = [f"recall_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
+        precision_cols = [
+            f"precision_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]
+        ]
+        recall_cols = [
+            f"recall_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]
+        ]
         f1_cols = [f"f1_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
         iou_cols = [f"iou_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
 
         # Create a DataFrame from the numpy arrays
         metrics_df = pd.DataFrame(
-            data=np.hstack(
-                (
-                    precision_vals,
-                    recall_vals,
-                    f1_vals,
-                    iou_vals,
-                    index_vals.reshape(-1, 1),
-                )
-            ),
-            columns=precision_cols
-            + recall_cols
-            + f1_cols
-            + iou_cols
-            + ["register_index"],
+            data=np.hstack((
+                precision_vals,
+                recall_vals,
+                f1_vals,
+                iou_vals,
+                index_vals.reshape(-1, 1),
+            )),
+            columns=precision_cols + recall_cols + f1_cols + iou_cols +
+            ["register_index"],
         )
         metrics_df["epoch"] = epoch
         return metrics_df
