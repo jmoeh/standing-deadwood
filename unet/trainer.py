@@ -9,10 +9,9 @@ from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 
 from accelerate import Accelerator
-from unet.cappedsampler import CappedSampler
-from unet.unet_model import UNet
-from unet.train_dataset import DeadwoodDataset
-from unet.unet_loss import PrecisionRecallF1IoU, TverskyFocalLoss, BCELoss, DiceLoss
+from model.cappedsampler import CappedSampler
+from model.train_dataset import DeadwoodDataset
+from model.loss import PrecisionRecallF1IoU, TverskyFocalLoss, BCELoss, DiceLoss
 import segmentation_models_pytorch as smp
 from accelerate.utils import InitProcessGroupKwargs
 
@@ -58,18 +57,12 @@ class DeadwoodTrainer:
 
     def setup_model(self):
         # model with three input channels (RGB)
-        if self.config["encoder_name"] != "unet":
-            model = smp.Unet(
-                encoder_name=self.config["encoder_name"],
-                encoder_weights=self.config["encoder_weights"],
-                in_channels=3,
-                classes=1,
-            ).to(memory_format=torch.channels_last)
-        else:
-            model = UNet(
-                n_channels=3,
-                n_classes=1,
-            ).to(memory_format=torch.channels_last)
+        model = smp.Unet(
+            encoder_name=self.config["encoder_name"],
+            encoder_weights=self.config["encoder_weights"],
+            in_channels=3,
+            classes=1,
+        ).to(memory_format=torch.channels_last)
         self.model = torch.compile(model)
 
         if self.config["loss"] == "bce":
