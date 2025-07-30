@@ -1,5 +1,5 @@
 { 
-    "experiment_name": "segformer_b5_oversample_newdata",
+    "experiment_name": "segformer_b5_new_metric",
     "use_wandb": "true",
     "save_checkpoint": "true",
     "epochs": 105,

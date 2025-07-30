@@ -1,5 +1,4 @@
-from collections import defaultdict
-import pandas as pd
+from collections import defaultdict import pandas as pd
 import torch
 import torch.nn as nn
 
@@ -139,3 +138,51 @@ class PrecisionRecallF1IoU(nn.Module):
             iou[:, i] = tp / (tp + fp + fn + self.smooth)
 
         return precision, recall, f1, iou
+
+
+
+class GlobalPrecisionRecallF1IoU(nn.Module):
+    def __init__(self, threshold=0.5):
+        super(GlobalPrecisionRecallF1IoU, self).__init__()
+        self.threshold = threshold
+
+    def forward(self, true_masks, predicted_masks, weight_masks):
+        """
+        Compute TP, FP, FN, TN counts per patch across the batch.
+        
+        Args:
+            true_masks: Ground truth masks [batch_size, height, width]
+            predicted_masks: Predicted masks [batch_size, height, width] 
+            weight_masks: Weight masks [batch_size, height, width]
+            
+        Returns:
+            dict with keys:
+                - 'tp': true positives count per patch [batch_size]
+                - 'fp': false positives count per patch [batch_size]
+                - 'fn': false negatives count per patch [batch_size]
+                - 'tn': true negatives count per patch [batch_size]
+        """
+        # Binarize the masks based on the threshold
+        true_masks_bin = (true_masks > self.threshold).float()
+        predicted_masks_bin = (predicted_masks > self.threshold).float()
+        weight_masks_bin = (weight_masks > self.threshold).float()
+        
+        # Apply weights to consider only weighted areas
+        true_masks_weighted = true_masks_bin * weight_masks_bin
+        predicted_masks_weighted = predicted_masks_bin * weight_masks_bin
+        weighted_negatives_true = (1 - true_masks_bin) * weight_masks_bin
+        weighted_negatives_pred = (1 - predicted_masks_bin) * weight_masks_bin
+        
+        # Compute true positives, false positives, false negatives, true negatives per patch
+        # Sum across spatial dimensions (height, width) but keep batch dimension
+        tp = (predicted_masks_weighted * true_masks_weighted).sum(dim=(1, 2))
+        fp = (predicted_masks_weighted * weighted_negatives_true).sum(dim=(1, 2))
+        fn = (weighted_negatives_pred * true_masks_weighted).sum(dim=(1, 2))
+        tn = (weighted_negatives_pred * weighted_negatives_true).sum(dim=(1, 2))
+        
+        return {
+            'tp': tp,
+            'fp': fp,
+            'fn': fn,
+            'tn': tn
+        }

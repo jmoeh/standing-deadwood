@@ -11,7 +11,7 @@ from tqdm import tqdm
 from accelerate import Accelerator
 from model.cappedsampler import CappedSampler
 from model.train_dataset import DeadwoodDataset
-from model.loss import PrecisionRecallF1IoU, TverskyFocalLoss, BCELoss, DiceLoss
+from model.loss import GlobalPrecisionRecallF1IoU, TverskyFocalLoss, BCELoss, DiceLoss
 import segmentation_models_pytorch as smp
 from accelerate.utils import InitProcessGroupKwargs
 
@@ -192,19 +192,22 @@ class DeadwoodTrainer:
                 })
             if (((epoch + 1) % self.config["val_every"] == 0)
                     or epoch == 0) and self.config["no_folds"] > 1:
-                val_loss, metrics = self.evaluate(epoch=epoch, fold=fold)
+                val_loss, metrics_df = self.evaluate(epoch=epoch, fold=fold)
 
-                metrics_df = self.get_metrics(metrics, epoch)
                 metrics_df.to_csv(
                     f"{self.run_path}/fold_{fold}_epoch_{epoch}_metrics.csv",
                     index=False,
                 )
                 if self.config["use_wandb"]:
-                    self.accelerator.log({
+                    # Log global metrics to wandb
+                    global_metrics = self.compute_global_metrics(metrics_df)
+                    wandb_log = {
                         "val_loss": val_loss,
                         "epoch": epoch,
                         "fold": fold,
-                    })
+                        **global_metrics
+                    }
+                    self.accelerator.log(wandb_log)
 
             else:
                 print(f"train loss: {train_loss}")
@@ -226,7 +229,11 @@ class DeadwoodTrainer:
             unit="img",
             disable=not self.accelerator.is_local_main_process,
         )
-        metrics_eval = []
+        
+        # Initialize metric computer
+        metric_computer = GlobalPrecisionRecallF1IoU(threshold=0.5)
+        all_metrics_data = []
+        
         for images, masks_true, masks_weights, indexes in self.val_loader:
             images = images.to(
                 dtype=torch.float32,
@@ -245,62 +252,113 @@ class DeadwoodTrainer:
                                   all_masks_weights.squeeze(1))
             epoch_loss += loss.item()
 
-            all_precision, all_recall, all_f1, all_iou = PrecisionRecallF1IoU(
-            )(all_masks_true, all_masks_pred, all_masks_weights)
-            all_metrics = torch.cat(
-                (
-                    all_precision,
-                    all_recall,
-                    all_f1,
-                    all_iou,
-                    all_indexes.unsqueeze(1).cpu(),
-                ),
-                dim=1,
-            )
-            metrics_eval.append(all_metrics)
+            # Get raw counts per patch
+            counts = metric_computer(all_masks_true.float(), all_masks_pred, all_masks_weights.float())
+            
+            # Create batch metrics data
+            batch_data = {
+                'tp': counts['tp'].cpu().numpy(),
+                'fp': counts['fp'].cpu().numpy(), 
+                'fn': counts['fn'].cpu().numpy(),
+                'tn': counts['tn'].cpu().numpy(),
+                'register_index': all_indexes.cpu().numpy(),
+                'epoch': epoch
+            }
+            all_metrics_data.append(batch_data)
             pbar.update(images.shape[0])
 
-        metrics = torch.cat(metrics_eval, dim=0)
-        return epoch_loss / len(self.val_loader), metrics
+        # Combine all batch data into single arrays
+        combined_data = {
+            'tp': np.concatenate([batch['tp'] for batch in all_metrics_data]),
+            'fp': np.concatenate([batch['fp'] for batch in all_metrics_data]),
+            'fn': np.concatenate([batch['fn'] for batch in all_metrics_data]),
+            'tn': np.concatenate([batch['tn'] for batch in all_metrics_data]),
+            'register_index': np.concatenate([batch['register_index'] for batch in all_metrics_data]),
+            'epoch': np.full(sum(len(batch['tp']) for batch in all_metrics_data), epoch)
+        }
+        
+        # Compute per-patch metrics
+        metrics_df = self.compute_per_patch_metrics(combined_data)
+        
+        return epoch_loss / len(self.val_loader), metrics_df
 
-    def get_metrics(self, metrics: torch.Tensor, epoch: int):
-        metrics_np = metrics.numpy()  # if the tensor is a PyTorch tensor
-        # If it's a numpy array already, you can skip the conversion step.
-
-        # Split the array into precision, recall, F1, and index
-        precision_vals = metrics_np[:, :
-                                    9]  # Precision columns for thresholds 0.1 to 0.9
-        recall_vals = metrics_np[:, 9:
-                                 18]  # Recall columns for thresholds 0.1 to 0.9
-        f1_vals = metrics_np[:, 18:27]  # F1 columns for thresholds 0.1 to 0.9
-        iou_vals = metrics_np[:,
-                              27:36]  # IoU columns for thresholds 0.1 to 0.9
-        index_vals = metrics_np[:, 36]  # Register index
-
-        # Create column names for the DataFrame
-        precision_cols = [
-            f"precision_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]
-        ]
-        recall_cols = [
-            f"recall_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]
-        ]
-        f1_cols = [f"f1_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
-        iou_cols = [f"iou_{t:.1f}" for t in [0.1 * i for i in range(1, 10)]]
-
-        # Create a DataFrame from the numpy arrays
-        metrics_df = pd.DataFrame(
-            data=np.hstack((
-                precision_vals,
-                recall_vals,
-                f1_vals,
-                iou_vals,
-                index_vals.reshape(-1, 1),
-            )),
-            columns=precision_cols + recall_cols + f1_cols + iou_cols +
-            ["register_index"],
-        )
-        metrics_df["epoch"] = epoch
+    def compute_per_patch_metrics(self, data):
+        """Compute per-patch metrics from raw counts"""
+        smooth = 1e-8
+        
+        tp = data['tp']
+        fp = data['fp']
+        fn = data['fn']
+        tn = data['tn']
+        
+        # Compute per-patch metrics
+        precision = tp / (tp + fp + smooth)
+        recall = tp / (tp + fn + smooth)
+        f1 = 2 * precision * recall / (precision + recall + smooth)
+        iou = tp / (tp + fp + fn + smooth)
+        accuracy = (tp + tn) / (tp + fp + fn + tn + smooth)
+        specificity = tn / (tn + fp + smooth)
+        
+        # Create old-style column names for backward compatibility
+        # Only threshold 0.5 matters, so we create single columns with _0.5 suffix
+        metrics_df = pd.DataFrame({
+            # Raw counts (new)
+            'tp': tp,
+            'fp': fp,
+            'fn': fn,
+            'tn': tn,
+            
+            # New computed metrics
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'iou': iou,
+            'accuracy': accuracy,
+            'specificity': specificity,
+            
+            # Old-style column names for backward compatibility (threshold 0.5 only)
+            'precision_0.5': precision,
+            'recall_0.5': recall,
+            'f1_0.5': f1,
+            'iou_0.5': iou,
+            
+            # Metadata
+            'register_index': data['register_index'],
+            'epoch': data['epoch']
+        })
+        
         return metrics_df
+    
+    def compute_global_metrics(self, metrics_df):
+        """Compute global metrics by summing all TP, FP, FN, TN across patches"""
+        smooth = 1e-8
+        
+        # Sum counts across all patches
+        total_tp = metrics_df['tp'].sum()
+        total_fp = metrics_df['fp'].sum()
+        total_fn = metrics_df['fn'].sum()
+        total_tn = metrics_df['tn'].sum()
+        
+        # Compute global metrics
+        global_precision = total_tp / (total_tp + total_fp + smooth)
+        global_recall = total_tp / (total_tp + total_fn + smooth)
+        global_f1 = 2 * global_precision * global_recall / (global_precision + global_recall + smooth)
+        global_iou = total_tp / (total_tp + total_fp + total_fn + smooth)
+        global_accuracy = (total_tp + total_tn) / (total_tp + total_fp + total_fn + total_tn + smooth)
+        global_specificity = total_tn / (total_tn + total_fp + smooth)
+        
+        return {
+            'global_precision': global_precision,
+            'global_recall': global_recall,
+            'global_f1': global_f1,
+            'global_iou': global_iou,
+            'global_accuracy': global_accuracy,
+            'global_specificity': global_specificity,
+            'total_tp': total_tp,
+            'total_fp': total_fp,
+            'total_fn': total_fn,
+            'total_tn': total_tn
+        }
 
     def save_checkpoint(self, fold: int, epoch: int):
         checkpoint_name = f"{self.run_path}/fold_{fold}_epoch_{epoch}"

@@ -11,7 +11,7 @@ sys.path.append(
 )
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "unet")))
 
-from unet.trainer import DeadwoodTrainer
+from model.trainer import DeadwoodTrainer
 
 if __name__ == "__main__":
 

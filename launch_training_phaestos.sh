@@ -11,7 +11,7 @@ LAUNCHER="accelerate launch \
     --gpu_ids 0,1,2 \
     --main_process_port=10974 \
     /net/home/cmosig/projects/standing-deadwood/train.py \
-    --config /net/home/cmosig/projects/standing-deadwood/config_mixvision_large_oversample_newdata_full_training.json
+    --config /net/home/cmosig/projects/standing-deadwood/config_mixvision_large_oversample_newdata.json \
 "
 
 $LAUNCHER
